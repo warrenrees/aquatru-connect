@@ -39,7 +39,7 @@ from .mqtt import (
 _LOGGER = logging.getLogger(__name__)
 
 # Longer polling interval when MQTT is connected (fallback only)
-MQTT_FALLBACK_SCAN_INTERVAL = timedelta(minutes=5)
+MQTT_FALLBACK_SCAN_INTERVAL = timedelta(hours=6)
 
 # Issue IDs
 ISSUE_CONNECTION_FAILED = "connection_failed"

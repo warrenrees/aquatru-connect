@@ -6,7 +6,7 @@ DOMAIN: Final = "aquatru"
 
 # API Configuration
 API_BASE_URL: Final = "https://api.aquatruwater.com/v1"
-DEFAULT_SCAN_INTERVAL: Final = timedelta(minutes=1)
+DEFAULT_SCAN_INTERVAL: Final = timedelta(minutes=10)
 
 # API Endpoints (note: /v1 prefix is included in base URL)
 ENDPOINT_LOGIN: Final = "user/auth/login"

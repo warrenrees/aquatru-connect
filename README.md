@@ -187,7 +187,7 @@ Entity IDs are based on your device name in the AquaTru app. If you rename your 
 
 The integration uses two methods for data updates:
 
-- **Cloud Polling**: The AquaTru cloud API is polled every 5 minutes for comprehensive device data including filter life, usage statistics, and savings calculations.
+- **Cloud Polling**: The AquaTru cloud API is polled every 10 minutes for comprehensive device data including filter life, usage statistics, and savings calculations. When MQTT is connected, polling is reduced to every 6 hours as a fallback.
 - **MQTT Real-time Updates**: When available, the integration connects to AquaTru's MQTT service for instant updates to TDS readings and device status. AWS credentials are automatically refreshed every 6 hours.
 
 The MQTT Status sensor indicates whether real-time updates are active.
