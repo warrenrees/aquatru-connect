@@ -101,6 +101,7 @@ class AquaTruMqttClient:
         self._subscribed_topics: list[str] = []
         self._reconnect_task: asyncio.Task | None = None
         self._credential_refresh_task: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None  # Store event loop for thread-safe callbacks
 
     @property
     def is_connected(self) -> bool:
@@ -350,6 +351,9 @@ class AquaTruMqttClient:
     async def async_connect(self) -> bool:
         """Connect to AWS IoT MQTT broker."""
         try:
+            # Store event loop reference for thread-safe callbacks from AWS SDK
+            self._loop = asyncio.get_running_loop()
+
             # Get Cognito identity and credentials
             identity_id = await self._get_cognito_identity()
             self._credentials = await self._get_credentials(identity_id)
@@ -417,17 +421,16 @@ class AquaTruMqttClient:
 
             # Call the callback if set
             if self._on_message:
-                # Schedule callback on asyncio event loop
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.call_soon_threadsafe(
-                        lambda: asyncio.create_task(
-                            self._async_on_message(topic, data)
+                # Schedule callback on asyncio event loop using stored reference
+                # (AWS SDK callbacks run in separate threads, so we can't use get_running_loop())
+                if self._loop is not None:
+                    self._loop.call_soon_threadsafe(
+                        lambda t=topic, d=data: self._loop.create_task(
+                            self._async_on_message(t, d)
                         )
                     )
-                except RuntimeError:
-                    # No running loop, call directly (shouldn't happen in HA)
-                    _LOGGER.warning("No running event loop for MQTT callback")
+                else:
+                    _LOGGER.warning("No event loop stored for MQTT callback")
 
         except json.JSONDecodeError as err:
             _LOGGER.error("Failed to parse MQTT message: %s", err)
@@ -444,12 +447,14 @@ class AquaTruMqttClient:
         _LOGGER.warning("MQTT connection interrupted: %s", error)
         self._connected = False
 
-        # Schedule reconnection
-        try:
-            loop = asyncio.get_running_loop()
-            self._reconnect_task = loop.create_task(self._async_reconnect())
-        except RuntimeError:
-            _LOGGER.error("Cannot schedule reconnection - no running event loop")
+        # Schedule reconnection using stored event loop reference
+        # (AWS SDK callbacks run in separate threads)
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(
+                lambda: setattr(self, '_reconnect_task', self._loop.create_task(self._async_reconnect()))
+            )
+        else:
+            _LOGGER.error("Cannot schedule reconnection - no event loop stored")
 
     def _on_connection_resumed(self, connection, return_code, session_present, **kwargs) -> None:
         """Handle connection resumption."""

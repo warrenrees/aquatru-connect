@@ -1,7 +1,10 @@
 ## Changelog
 
 ### [Unreleased]
+
+### v1.1.1
 - Reduced cloud polling frequency: 10 minutes primary (was 1 minute), 6 hours with MQTT active (was 5 minutes)
+- Fixed MQTT callbacks not updating Home Assistant entities (stored event loop reference for thread-safe callbacks from AWS SDK threads)
 
 ### v1.1.0
 - Added AWS IoT MQTT support for real-time updates
