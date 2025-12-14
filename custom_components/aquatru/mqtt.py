@@ -273,7 +273,8 @@ class AquaTruMqttClient:
                     _LOGGER.error("Failed to get Cognito identity: %s", text)
                     raise Exception(f"Cognito GetId failed: {resp.status}")
 
-                data = await resp.json()
+                # Use content_type=None to accept application/x-amz-json-1.1
+                data = await resp.json(content_type=None)
                 identity_id = data.get("IdentityId")
                 _LOGGER.debug("Got Cognito identity ID: %s", identity_id)
                 return identity_id
@@ -305,7 +306,8 @@ class AquaTruMqttClient:
                     _LOGGER.error("Failed to get Cognito credentials: %s", text)
                     raise Exception(f"Cognito GetCredentialsForIdentity failed: {resp.status}")
 
-                data = await resp.json()
+                # Use content_type=None to accept application/x-amz-json-1.1
+                data = await resp.json(content_type=None)
                 creds = data.get("Credentials", {})
 
                 # Parse expiration timestamp
