@@ -68,6 +68,7 @@ class AquaTruMqttClient:
         access_token: str,
         aws_settings: AwsIotSettings | None = None,
         on_message: Callable[[str, dict[str, Any]], None] | None = None,
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
         """Initialize the MQTT client.
 
@@ -76,6 +77,7 @@ class AquaTruMqttClient:
             access_token: AquaTru API access token (used as Cognito login token)
             aws_settings: AWS IoT settings (if None, uses hardcoded defaults)
             on_message: Callback for received messages (topic, payload)
+            session: Optional aiohttp session (if None, creates own session)
         """
         # Clean MAC address: remove colons/dashes and lowercase
         self._device_mac = device_mac.replace(":", "").replace("-", "").lower()
@@ -93,7 +95,8 @@ class AquaTruMqttClient:
         self._on_message = on_message
         self._credentials: CognitoCredentials | None = None
         self._mqtt_connection: mqtt.Connection | None = None
-        self._session: aiohttp.ClientSession | None = None
+        self._session = session
+        self._owns_session = session is None  # Track if we created the session
         self._connected = False
         self._subscribed_topics: list[str] = []
         self._reconnect_task: asyncio.Task | None = None
@@ -251,8 +254,10 @@ class AquaTruMqttClient:
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure we have an active HTTP session."""
         if self._session is None or self._session.closed:
+            # Only create a session if we don't have one (i.e., none was injected)
             connector = aiohttp.TCPConnector(resolver=ThreadedResolver())
             self._session = aiohttp.ClientSession(connector=connector)
+            self._owns_session = True
         return self._session
 
     async def _get_cognito_identity(self) -> str:
@@ -506,7 +511,8 @@ class AquaTruMqttClient:
             finally:
                 self._connected = False
 
-        if self._session and not self._session.closed:
+        # Only close the session if we created it
+        if self._owns_session and self._session and not self._session.closed:
             await self._session.close()
 
     def update_access_token(self, access_token: str) -> None:

@@ -11,16 +11,14 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, UnitOfTime, UnitOfVolume, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import AquaTruConfigEntry
 from .api import AquaTruDeviceData
 
 from .const import (
-    DATA_COORDINATOR,
-    DOMAIN,
     SENSOR_BOTTLES_SAVED,
     SENSOR_CONNECTION_STATUS,
     SENSOR_FILTER_PRE,
@@ -177,6 +175,7 @@ SENSOR_DESCRIPTIONS: tuple[AquaTruSensorEntityDescription, ...] = (
         translation_key="wifi_network",
         icon="mdi:wifi",
         entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
         value_fn=lambda data: data.connection_name,
     ),
     AquaTruSensorEntityDescription(
@@ -184,6 +183,7 @@ SENSOR_DESCRIPTIONS: tuple[AquaTruSensorEntityDescription, ...] = (
         translation_key="wifi_version",
         icon="mdi:chip",
         entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
         value_fn=lambda data: data.wifi_version,
     ),
     AquaTruSensorEntityDescription(
@@ -191,6 +191,7 @@ SENSOR_DESCRIPTIONS: tuple[AquaTruSensorEntityDescription, ...] = (
         translation_key="mcu_version",
         icon="mdi:chip",
         entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
         value_fn=lambda data: data.mcu_version,
     ),
 )
@@ -205,13 +206,11 @@ def _calculate_tds_reduction(data: AquaTruDeviceData) -> float | None:
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: AquaTruConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up AquaTru sensors based on a config entry."""
-    coordinator: AquaTruDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id][
-        DATA_COORDINATOR
-    ]
+    coordinator = entry.runtime_data.coordinator
 
     entities: list[SensorEntity] = [
         AquaTruSensor(coordinator, description)
@@ -251,6 +250,7 @@ class AquaTruMqttStatusSensor(AquaTruEntity, SensorEntity):
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
     _attr_icon = "mdi:broadcast"
     _attr_options = ["connected", "disconnected"]
     _attr_translation_key = "mqtt_status"

@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue, async_delete_issue
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import (
@@ -40,6 +41,12 @@ _LOGGER = logging.getLogger(__name__)
 # Longer polling interval when MQTT is connected (fallback only)
 MQTT_FALLBACK_SCAN_INTERVAL = timedelta(minutes=5)
 
+# Issue IDs
+ISSUE_CONNECTION_FAILED = "connection_failed"
+
+# Number of consecutive failures before creating an issue
+CONNECTION_FAILURE_THRESHOLD = 3
+
 
 class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
     """Class to manage fetching AquaTru data from the API."""
@@ -52,8 +59,9 @@ class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
         entry: ConfigEntry,
     ) -> None:
         """Initialize the coordinator."""
-        # Create client without shared session - let it manage its own
-        # This avoids DNS resolution issues with HA's shared aiohttp session
+        # Don't use HA's shared session - it uses aiodns which has DNS timeout issues
+        # on some devices (e.g., Home Assistant Yellow). Let API client create its own
+        # session with ThreadedResolver for reliable DNS resolution.
         self.client = AquaTruApiClient(
             phone=entry.data[CONF_PHONE],
             password=entry.data[CONF_PASSWORD],
@@ -66,6 +74,9 @@ class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
         # MQTT client for real-time updates
         self._mqtt_client: AquaTruMqttClient | None = None
         self._mqtt_connected = False
+
+        # Track consecutive connection failures for repair issues
+        self._consecutive_failures = 0
 
         super().__init__(
             hass,
@@ -114,6 +125,8 @@ class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
             else:
                 _LOGGER.warning("Could not fetch AWS settings, using defaults")
 
+            # Don't use HA's shared session - let MQTT client create its own
+            # session with ThreadedResolver for reliable DNS resolution
             self._mqtt_client = AquaTruMqttClient(
                 device_mac=mac_address,
                 access_token=access_token,
@@ -210,10 +223,33 @@ class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
                 _LOGGER.info("Attempting to start MQTT connection...")
                 await self.async_start_mqtt()
 
+            # Success - reset failure counter and clear any connection issues
+            if self._consecutive_failures > 0:
+                self._consecutive_failures = 0
+                async_delete_issue(
+                    self.hass,
+                    DOMAIN,
+                    f"{ISSUE_CONNECTION_FAILED}_{self.config_entry.entry_id}",
+                )
+
             return data
         except AquaTruAuthError as err:
             raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
         except AquaTruConnectionError as err:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= CONNECTION_FAILURE_THRESHOLD:
+                async_create_issue(
+                    self.hass,
+                    DOMAIN,
+                    f"{ISSUE_CONNECTION_FAILED}_{self.config_entry.entry_id}",
+                    is_fixable=False,
+                    severity=IssueSeverity.WARNING,
+                    translation_key="connection_failed",
+                    translation_placeholders={
+                        "device_name": self.device_name,
+                        "failures": str(self._consecutive_failures),
+                    },
+                )
             raise UpdateFailed(f"Connection error: {err}") from err
         except Exception as err:
             _LOGGER.exception("Unexpected error fetching data")
@@ -229,5 +265,5 @@ class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
             self._mqtt_connected = False
 
         await super().async_shutdown()
-        # Close the client session since we created it
+        # Close the API client session since we created it
         await self.client.close()

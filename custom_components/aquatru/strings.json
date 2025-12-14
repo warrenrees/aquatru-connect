@@ -25,6 +25,19 @@
         "data": {
           "password": "Password"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure AquaTru",
+        "description": "Update your AquaTru account credentials.",
+        "data": {
+          "phone": "Phone Number",
+          "password": "Password",
+          "country_code": "Country Code"
+        },
+        "data_description": {
+          "phone": "Enter your phone number without country prefix (e.g., 5551234567)",
+          "country_code": "Two-letter country code (e.g., US, CA)"
+        }
       }
     },
     "error": {
@@ -39,6 +52,29 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "is_filtering": {
+        "name": "Filtering"
+      },
+      "clean_tank_full": {
+        "name": "Clean Tank Full"
+      },
+      "tap_removed": {
+        "name": "Tap Tank Removed"
+      },
+      "tap_near_end": {
+        "name": "Tap Tank Low"
+      },
+      "clean_removed": {
+        "name": "Clean Tank Removed"
+      },
+      "synced": {
+        "name": "Purifier Synced"
+      },
+      "cover_up": {
+        "name": "Cover Open"
+      }
+    },
     "sensor": {
       "tds_tap": {
         "name": "Tap Water TDS"
@@ -102,6 +138,12 @@
           "disconnected": "Disconnected"
         }
       }
+    }
+  },
+  "issues": {
+    "connection_failed": {
+      "title": "Connection failed for {device_name}",
+      "description": "Unable to connect to AquaTru cloud service after {failures} attempts. Check your internet connection and verify the AquaTru service is available."
     }
   }
 }

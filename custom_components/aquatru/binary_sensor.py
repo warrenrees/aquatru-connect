@@ -10,11 +10,11 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
     BinarySensorEntityDescription,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import AquaTruConfigEntry
 from .api import AquaTruDeviceData
 from .const import (
     BINARY_SENSOR_CLEAN_REMOVED,
@@ -24,8 +24,6 @@ from .const import (
     BINARY_SENSOR_SYNCED,
     BINARY_SENSOR_TAP_NEAR_END,
     BINARY_SENSOR_TAP_REMOVED,
-    DATA_COORDINATOR,
-    DOMAIN,
 )
 from .coordinator import AquaTruDataUpdateCoordinator
 from .entity import AquaTruEntity
@@ -78,6 +76,7 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[AquaTruBinarySensorEntityDescription, ...] = (
         translation_key="synced",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
         entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
         icon="mdi:sync",
         value_fn=lambda data: data.is_purifier_synced,
     ),
@@ -93,13 +92,11 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[AquaTruBinarySensorEntityDescription, ...] = (
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: AquaTruConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up AquaTru binary sensors based on a config entry."""
-    coordinator: AquaTruDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id][
-        DATA_COORDINATOR
-    ]
+    coordinator = entry.runtime_data.coordinator
 
     entities = [
         AquaTruBinarySensor(coordinator, description)

@@ -13,6 +13,7 @@ A Home Assistant custom integration for AquaTru Connect (Classic Smart) WiFi wat
 - **Usage Statistics**: Track daily, weekly, monthly, and total water consumption
 - **Savings Calculator**: See how much money and plastic bottles you've saved
 - **Device Status**: Real-time status indicators for tank levels, filtering state, and connectivity
+- **Real-time Updates**: MQTT connection for instant TDS and status updates (when available)
 
 ## Supported Devices
 
@@ -45,9 +46,12 @@ A Home Assistant custom integration for AquaTru Connect (Classic Smart) WiFi wat
            ├── config_flow.py
            ├── const.py
            ├── coordinator.py
+           ├── diagnostics.py
            ├── entity.py
            ├── manifest.json
+           ├── mqtt.py
            ├── sensor.py
+           ├── strings.json
            └── translations/
                └── en.json
    ```
@@ -88,6 +92,7 @@ A Home Assistant custom integration for AquaTru Connect (Classic Smart) WiFi wat
 | WiFi Network | Connected WiFi network name | - |
 | WiFi Version | WiFi module firmware version | - |
 | MCU Version | Main controller firmware version | - |
+| MQTT Status | Real-time connection status | connected/disconnected |
 
 ### Binary Sensors
 
@@ -180,7 +185,20 @@ Entity IDs are based on your device name in the AquaTru app. If you rename your 
 
 ## Data Refresh
 
-The integration polls the AquaTru cloud API every 5 minutes by default. Real-time updates are not currently supported.
+The integration uses two methods for data updates:
+
+- **Cloud Polling**: The AquaTru cloud API is polled every 5 minutes for comprehensive device data including filter life, usage statistics, and savings calculations.
+- **MQTT Real-time Updates**: When available, the integration connects to AquaTru's MQTT service for instant updates to TDS readings and device status. AWS credentials are automatically refreshed every 6 hours.
+
+The MQTT Status sensor indicates whether real-time updates are active.
+
+## Known Limitations
+
+- **Cloud Dependency**: This integration requires an active internet connection to communicate with AquaTru's cloud API. Local-only control is not supported.
+- **Single Device per Entry**: Each config entry supports one AquaTru device. If you have multiple devices, add the integration multiple times.
+- **Usage Statistics Delay**: Daily, weekly, and monthly usage statistics may be delayed by up to 24 hours as they are calculated server-side.
+- **MQTT Availability**: Real-time MQTT updates depend on AquaTru's AWS IoT infrastructure. If MQTT is unavailable, the integration falls back to cloud polling.
+- **Filter Reset**: Filter life cannot be reset through this integration; use the official AquaTru mobile app.
 
 ## Privacy & Security
 

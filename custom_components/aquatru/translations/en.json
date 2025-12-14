@@ -27,6 +27,19 @@
         "data": {
           "password": "Password"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure AquaTru",
+        "description": "Update your AquaTru account credentials.",
+        "data": {
+          "phone": "Phone Number",
+          "password": "Password",
+          "country_code": "Country Code"
+        },
+        "data_description": {
+          "phone": "Enter your phone number without country prefix (e.g., 5551234567)",
+          "country_code": "Two-letter country code (e.g., US, CA)"
+        }
       }
     },
     "error": {
@@ -96,6 +109,13 @@
       },
       "mcu_version": {
         "name": "MCU Version"
+      },
+      "mqtt_status": {
+        "name": "MQTT Status",
+        "state": {
+          "connected": "Connected",
+          "disconnected": "Disconnected"
+        }
       }
     },
     "binary_sensor": {
@@ -120,6 +140,12 @@
       "cover_up": {
         "name": "Cover Open"
       }
+    }
+  },
+  "issues": {
+    "connection_failed": {
+      "title": "Connection failed for {device_name}",
+      "description": "Unable to connect to AquaTru cloud service after {failures} attempts. Check your internet connection and verify the AquaTru service is available."
     }
   }
 }

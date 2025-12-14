@@ -47,7 +47,9 @@ async def validate_input(
     hass: HomeAssistant, data: dict[str, Any]
 ) -> tuple[dict[str, Any], list[AquaTruDevice]]:
     """Validate the user input allows us to connect."""
-    # Don't use shared session - it has DNS resolution issues
+    # Don't use HA's shared session - it uses aiodns which has DNS timeout issues
+    # on some devices (e.g., Home Assistant Yellow). Let client create its own
+    # session with ThreadedResolver for reliable DNS resolution.
     client = AquaTruApiClient(
         phone=data[CONF_PHONE],
         password=data[CONF_PASSWORD],
@@ -212,5 +214,59 @@ class AquaTruConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="reauth_confirm",
             data_schema=vol.Schema({vol.Required(CONF_PASSWORD): str}),
+            errors=errors,
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle reconfiguration."""
+        errors: dict[str, str] = {}
+        reconfigure_entry = self._get_reconfigure_entry()
+
+        if user_input is not None:
+            try:
+                await validate_input(
+                    self.hass,
+                    {
+                        CONF_PHONE: user_input[CONF_PHONE],
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                        CONF_COUNTRY_CODE: user_input.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE),
+                    },
+                )
+            except AquaTruAuthError:
+                errors["base"] = ERROR_INVALID_CREDENTIALS
+            except AquaTruConnectionError:
+                errors["base"] = ERROR_CANNOT_CONNECT
+            except NoDevicesError:
+                errors["base"] = ERROR_NO_DEVICES
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.exception("Unexpected exception")
+                errors["base"] = ERROR_UNKNOWN
+            else:
+                return self.async_update_reload_and_abort(
+                    reconfigure_entry,
+                    data_updates={
+                        CONF_PHONE: user_input[CONF_PHONE],
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                        CONF_COUNTRY_CODE: user_input.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE),
+                    },
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_PHONE,
+                        default=reconfigure_entry.data.get(CONF_PHONE, ""),
+                    ): str,
+                    vol.Required(CONF_PASSWORD): str,
+                    vol.Optional(
+                        CONF_COUNTRY_CODE,
+                        default=reconfigure_entry.data.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE),
+                    ): str,
+                }
+            ),
             errors=errors,
         )
