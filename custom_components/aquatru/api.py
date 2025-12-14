@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiohttp
+from aiohttp.resolver import ThreadedResolver
 
 from .const import (
     API_BASE_URL,
@@ -55,10 +56,22 @@ class AquaTruDevice:
 
 
 @dataclass
+class AquaTruAwsSettings:
+    """AWS IoT settings from the API."""
+
+    identity_pool_id: str
+    user_pool_id: str
+    client_id: str
+    region: str
+    policy_name: str
+
+
+@dataclass
 class AquaTruDeviceData:
     """Data from an AquaTru device."""
 
     device_id: str
+    mac_address: str | None = None
     # TDS readings
     tds_tap: int | None = None
     tds_clean: int | None = None
@@ -119,12 +132,25 @@ class AquaTruApiClient:
         self._token_expiry: datetime | None = None
         self._user_id: str | None = None
         self._dashboard_data: dict[str, Any] | None = None
+        self._aws_settings: AquaTruAwsSettings | None = None
         self._close_session = False
+
+    @property
+    def aws_settings(self) -> AquaTruAwsSettings | None:
+        """Return the AWS settings."""
+        return self._aws_settings
+
+    @property
+    def access_token(self) -> str | None:
+        """Return the access token."""
+        return self._access_token
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure we have an active session."""
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            # Use ThreadedResolver to avoid aiodns issues in Home Assistant
+            connector = aiohttp.TCPConnector(resolver=ThreadedResolver())
+            self._session = aiohttp.ClientSession(connector=connector)
             self._close_session = True
         return self._session
 
@@ -133,15 +159,19 @@ class AquaTruApiClient:
         if self._close_session and self._session and not self._session.closed:
             await self._session.close()
 
-    def _get_headers(self, include_auth: bool = True) -> dict[str, str]:
+    def _get_headers(self, include_auth: bool = True, use_bearer: bool = True) -> dict[str, str]:
         """Get request headers."""
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "AquaTru/2.0.43 (Android)",
+            "User-Agent": "Dart/3.6 (dart:io)",
         }
         if include_auth and self._access_token:
-            headers["Authorization"] = f"Bearer {self._access_token}"
+            # Some endpoints use Bearer prefix, others use raw token
+            if use_bearer:
+                headers["Authorization"] = f"Bearer {self._access_token}"
+            else:
+                headers["authorization"] = self._access_token
         return headers
 
     async def _request(
@@ -151,31 +181,36 @@ class AquaTruApiClient:
         data: dict[str, Any] | None = None,
         include_auth: bool = True,
         retry_auth: bool = True,
+        use_bearer: bool = True,
     ) -> dict[str, Any]:
         """Make an API request."""
         session = await self._ensure_session()
         url = f"{API_BASE_URL}/{endpoint}"
-        headers = self._get_headers(include_auth)
+        headers = self._get_headers(include_auth, use_bearer)
 
         try:
             async with session.request(
                 method, url, json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=30)
             ) as response:
-                response_data = await response.json()
+                try:
+                    response_data = await response.json()
+                except Exception as json_err:
+                    _LOGGER.error("Failed to parse JSON response from %s: %s", endpoint, json_err)
+                    response_data = {}
 
                 if response.status == 401 and retry_auth and include_auth:
                     # Token expired, try to refresh
                     _LOGGER.debug("Token expired, attempting refresh")
                     await self._refresh_auth_token()
                     return await self._request(
-                        method, endpoint, data, include_auth, retry_auth=False
+                        method, endpoint, data, include_auth, retry_auth=False, use_bearer=use_bearer
                     )
 
                 if response.status == 401:
                     raise AquaTruAuthError("Authentication failed")
 
                 if response.status >= 400:
-                    error_msg = response_data.get("message", "Unknown error")
+                    error_msg = response_data.get("message", "Unknown error") if isinstance(response_data, dict) else str(response_data)
                     _LOGGER.error(
                         "API error %s: %s - %s", response.status, endpoint, error_msg
                     )
@@ -294,6 +329,61 @@ class AquaTruApiClient:
             _LOGGER.debug("Token refresh failed, performing full login")
             return await self.async_login()
 
+    async def async_get_settings(self) -> AquaTruAwsSettings | None:
+        """Fetch AWS settings from the API.
+
+        This endpoint returns the current AWS IoT configuration including
+        Cognito identity pool, user pool, and other settings that may change.
+        """
+        session = await self._ensure_session()
+        # Settings endpoint is on v2 API
+        url = "https://api.aquatruwater.com/v2/auth/getSettings"
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Dart/3.6 (dart:io)",
+        }
+
+        try:
+            async with session.get(
+                url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)
+            ) as response:
+                if response.status != 200:
+                    _LOGGER.warning("Failed to get settings: %s", response.status)
+                    return None
+
+                data = await response.json()
+
+                if not data.get("status"):
+                    _LOGGER.warning("Settings response status is false")
+                    return None
+
+                settings_data = data.get("data", {})
+                aws_details = settings_data.get("awsDetails", {})
+
+                if not aws_details:
+                    _LOGGER.warning("No AWS details in settings response")
+                    return None
+
+                self._aws_settings = AquaTruAwsSettings(
+                    identity_pool_id=aws_details.get("identityPoolId", ""),
+                    user_pool_id=aws_details.get("awsUserPoolId", ""),
+                    client_id=aws_details.get("awsClientId", ""),
+                    region=aws_details.get("region", "us-east-1"),
+                    policy_name=aws_details.get("awsPolicyName", ""),
+                )
+
+                _LOGGER.debug(
+                    "Got AWS settings: region=%s, identity_pool=%s",
+                    self._aws_settings.region,
+                    self._aws_settings.identity_pool_id,
+                )
+                return self._aws_settings
+
+        except Exception as err:
+            _LOGGER.warning("Error fetching settings: %s", err)
+            return None
+
     async def async_ensure_authenticated(self) -> bool:
         """Ensure we have a valid authentication token."""
         if not self._access_token:
@@ -360,58 +450,118 @@ class AquaTruApiClient:
             is_connected=is_connected,
         )
 
+    async def async_get_statistics(
+        self, device_id: str, time_period: str, amount: int = 7
+    ) -> list[dict[str, Any]]:
+        """Get usage statistics for a device.
+
+        Args:
+            device_id: The device ID
+            time_period: One of 'day', 'week', 'month', 'year'
+            amount: Number of periods to retrieve
+
+        Returns:
+            List of dicts with 'amount' and 'period' keys
+        """
+        endpoint = f"{ENDPOINT_PURIFIERS}/{device_id}/statistic?amount={amount}&timePeriod={time_period}"
+        try:
+            response = await self._request("GET", endpoint, use_bearer=False)
+            if isinstance(response, list):
+                return response
+            return []
+        except AquaTruApiError as err:
+            _LOGGER.warning("Failed to get %s statistics: %s", time_period, err)
+            return []
+
     async def async_get_device_data(self, device_id: str) -> AquaTruDeviceData:
         """Get current data for a device."""
         await self.async_ensure_authenticated()
 
         device_data = AquaTruDeviceData(device_id=device_id)
 
-        # Try to use dashboard data from login first
-        if self._dashboard_data:
-            purifiers = self._dashboard_data.get("purifiers", [])
-            for purifier in purifiers:
-                if purifier.get("id") == device_id:
-                    self._parse_dashboard_purifier(purifier, device_data)
-                    device_data.last_updated = datetime.now()
-                    return device_data
-
-        # Fall back to API calls if dashboard data not available
+        # Fetch fresh data from user/purifiers endpoint (uses raw token, not Bearer)
         try:
             response = await self._request(
                 "GET",
-                f"{ENDPOINT_PURIFIERS_LIST}?deviceId={device_id}",
+                ENDPOINT_PURIFIERS,
+                use_bearer=False,
             )
-            self._parse_purifier_data(response, device_data)
+
+            _LOGGER.debug("Got purifiers response: %s", type(response))
+
+            # Response is a list of purifiers
+            if isinstance(response, list):
+                _LOGGER.debug("Looking for device_id=%s in %d purifiers", device_id, len(response))
+                for purifier in response:
+                    purifier_id = purifier.get("id")
+                    _LOGGER.debug("Comparing: purifier_id=%s (type=%s) vs device_id=%s (type=%s)",
+                                  purifier_id, type(purifier_id).__name__, device_id, type(device_id).__name__)
+                    if purifier_id == device_id:
+                        self._parse_dashboard_purifier(purifier, device_data)
+                        _LOGGER.debug("Parsed device data for %s", device_id)
+                        break
+                else:
+                    _LOGGER.warning("Device %s not found in purifiers list", device_id)
+            else:
+                _LOGGER.warning("Unexpected response type: %s", type(response))
         except AquaTruApiError as err:
             _LOGGER.warning("Failed to get purifier data: %s", err)
+        except Exception as err:
+            _LOGGER.exception("Unexpected error getting device data: %s", err)
 
-        # Get connection status
+        # Fetch usage statistics
         try:
-            status_response = await self._request(
-                "GET",
-                f"{ENDPOINT_CONNECTION_STATUS}?deviceId={device_id}",
-            )
-            self._parse_connection_status(status_response, device_data)
-        except AquaTruApiError as err:
-            _LOGGER.warning("Failed to get connection status: %s", err)
-
-        # Get usage/savings data
-        try:
-            savings_response = await self._request(
-                "GET",
-                f"{ENDPOINT_SAVINGS}?deviceId={device_id}",
-            )
-            self._parse_savings_data(savings_response, device_data)
-        except AquaTruApiError as err:
-            _LOGGER.warning("Failed to get savings data: %s", err)
+            await self._fetch_usage_statistics(device_id, device_data)
+        except Exception as err:
+            _LOGGER.warning("Failed to fetch usage statistics: %s", err)
 
         device_data.last_updated = datetime.now()
         return device_data
+
+    async def _fetch_usage_statistics(
+        self, device_id: str, device_data: AquaTruDeviceData
+    ) -> None:
+        """Fetch and parse usage statistics for daily, weekly, monthly usage."""
+        today = datetime.now()
+
+        # Get daily stats (last 7 days, find today's usage)
+        daily_stats = await self.async_get_statistics(device_id, "day", 7)
+        today_str = today.strftime("%Y-%m-%d")
+        for stat in daily_stats:
+            if stat.get("period") == today_str:
+                device_data.daily_usage = self._safe_float(stat.get("amount"))
+                break
+
+        # Get weekly stats (last 4 weeks, find this week's usage)
+        weekly_stats = await self.async_get_statistics(device_id, "week", 4)
+        # Week format is YYYY-WW (ISO week number), use %G-%V for ISO week
+        current_week = today.strftime("%G-%V")
+        for stat in weekly_stats:
+            if stat.get("period") == current_week:
+                device_data.weekly_usage = self._safe_float(stat.get("amount"))
+                break
+
+        # Get monthly stats (last 3 months, find this month's usage)
+        monthly_stats = await self.async_get_statistics(device_id, "month", 3)
+        current_month = today.strftime("%Y-%m")
+        for stat in monthly_stats:
+            if stat.get("period") == current_month:
+                device_data.monthly_usage = self._safe_float(stat.get("amount"))
+                break
+
+        _LOGGER.debug("Usage stats: daily=%s, weekly=%s, monthly=%s",
+                      device_data.daily_usage, device_data.weekly_usage, device_data.monthly_usage)
 
     def _parse_dashboard_purifier(
         self, data: dict[str, Any], device_data: AquaTruDeviceData
     ) -> None:
         """Parse purifier data from dashboard response."""
+        _LOGGER.debug("Parsing purifier data: tdsTap=%s, tdsClean=%s, connectionStatus=%s",
+                      data.get("tdsTap"), data.get("tdsClean"), data.get("connectionStatus"))
+
+        # MAC address
+        device_data.mac_address = data.get("macAddress")
+
         # TDS readings
         device_data.tds_tap = self._safe_int(data.get("tdsTap"))
         device_data.tds_clean = self._safe_int(data.get("tdsClean"))

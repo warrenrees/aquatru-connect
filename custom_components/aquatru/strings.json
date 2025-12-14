@@ -82,6 +82,25 @@
           "connected": "Connected",
           "disconnected": "Disconnected"
         }
+      },
+      "filtration_time": {
+        "name": "Filtration Time"
+      },
+      "wifi_network": {
+        "name": "WiFi Network"
+      },
+      "wifi_version": {
+        "name": "WiFi Version"
+      },
+      "mcu_version": {
+        "name": "MCU Version"
+      },
+      "mqtt_status": {
+        "name": "MQTT Status",
+        "state": {
+          "connected": "Connected",
+          "disconnected": "Disconnected"
+        }
       }
     }
   }

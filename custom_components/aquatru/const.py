@@ -6,7 +6,7 @@ DOMAIN: Final = "aquatru"
 
 # API Configuration
 API_BASE_URL: Final = "https://api.aquatruwater.com/v1"
-DEFAULT_SCAN_INTERVAL: Final = timedelta(minutes=5)
+DEFAULT_SCAN_INTERVAL: Final = timedelta(minutes=1)
 
 # API Endpoints (note: /v1 prefix is included in base URL)
 ENDPOINT_LOGIN: Final = "user/auth/login"
@@ -28,6 +28,7 @@ CONF_PHONE: Final = "phone"
 CONF_PASSWORD: Final = "password"
 CONF_DEVICE_ID: Final = "device_id"
 CONF_DEVICE_NAME: Final = "device_name"
+CONF_DEVICE_MAC: Final = "device_mac"
 CONF_COUNTRY_CODE: Final = "country_code"
 DEFAULT_COUNTRY_CODE: Final = "CA"
 
@@ -58,6 +59,7 @@ SENSOR_FILTRATION_TIME: Final = "filtration_time"
 SENSOR_WIFI_VERSION: Final = "wifi_version"
 SENSOR_MCU_VERSION: Final = "mcu_version"
 SENSOR_WIFI_NETWORK: Final = "wifi_network"
+SENSOR_MQTT_STATUS: Final = "mqtt_status"
 
 # Binary sensor keys
 BINARY_SENSOR_FILTERING: Final = "is_filtering"
@@ -88,3 +90,21 @@ ERROR_CANNOT_CONNECT: Final = "cannot_connect"
 ERROR_UNKNOWN: Final = "unknown"
 ERROR_INVALID_CREDENTIALS: Final = "invalid_credentials"
 ERROR_NO_DEVICES: Final = "no_devices"
+
+# AWS IoT MQTT Configuration
+AWS_IOT_ENDPOINT: Final = "a3o7za1n1qr1kr-ats.iot.us-east-1.amazonaws.com"
+AWS_REGION: Final = "us-east-1"
+COGNITO_IDENTITY_POOL_ID: Final = "us-east-1:f89c5342-e044-46f9-b224-f8eded8fcf04"
+COGNITO_USER_POOL_ID: Final = "us-east-1_le1eG0zpY"
+COGNITO_CLIENT_ID: Final = "7ok90mtc4nn1qs597fqsaqe3u4"
+COGNITO_IDENTITY_ENDPOINT: Final = "https://cognito-identity.us-east-1.amazonaws.com"
+
+# MQTT Topics (use device MAC address without colons)
+MQTT_TOPIC_SENSOR_DATA: Final = "aws/{mac}/event/SENSOR-DATA"
+MQTT_TOPIC_DEVICE_STATUS: Final = "aws/{mac}/event/DEVICE-STATUS"
+MQTT_TOPIC_MCU_VERSION: Final = "aws/{mac}/event/MCU-VERSION"
+MQTT_TOPIC_MCU_MODEL_ID: Final = "aws/{mac}/event/MCU-MODEL-ID"
+MQTT_TOPIC_WELCOME: Final = "aws/{mac}/event/WELCOME"
+
+# Data keys for MQTT
+DATA_MQTT_CLIENT: Final = "mqtt_client"

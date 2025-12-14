@@ -29,6 +29,7 @@ from .const import (
     SENSOR_FILTRATION_TIME,
     SENSOR_MCU_VERSION,
     SENSOR_MONEY_SAVED,
+    SENSOR_MQTT_STATUS,
     SENSOR_TDS_CLEAN,
     SENSOR_TDS_REDUCTION,
     SENSOR_TDS_TAP,
@@ -142,7 +143,7 @@ SENSOR_DESCRIPTIONS: tuple[AquaTruSensorEntityDescription, ...] = (
         translation_key="money_saved",
         native_unit_of_measurement="$",
         device_class=SensorDeviceClass.MONETARY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         icon="mdi:piggy-bank",
         value_fn=lambda data: data.money_saved,
     ),
@@ -175,6 +176,7 @@ SENSOR_DESCRIPTIONS: tuple[AquaTruSensorEntityDescription, ...] = (
         key=SENSOR_WIFI_NETWORK,
         translation_key="wifi_network",
         icon="mdi:wifi",
+        entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda data: data.connection_name,
     ),
     AquaTruSensorEntityDescription(
@@ -211,10 +213,13 @@ async def async_setup_entry(
         DATA_COORDINATOR
     ]
 
-    entities = [
+    entities: list[SensorEntity] = [
         AquaTruSensor(coordinator, description)
         for description in SENSOR_DESCRIPTIONS
     ]
+
+    # Add MQTT status diagnostic sensor
+    entities.append(AquaTruMqttStatusSensor(coordinator))
 
     async_add_entities(entities)
 
@@ -239,3 +244,22 @@ class AquaTruSensor(AquaTruEntity, SensorEntity):
         if self.coordinator.data is None:
             return None
         return self.entity_description.value_fn(self.coordinator.data)
+
+
+class AquaTruMqttStatusSensor(AquaTruEntity, SensorEntity):
+    """MQTT connection status sensor."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_icon = "mdi:broadcast"
+    _attr_options = ["connected", "disconnected"]
+    _attr_translation_key = "mqtt_status"
+
+    def __init__(self, coordinator: AquaTruDataUpdateCoordinator) -> None:
+        """Initialize the MQTT status sensor."""
+        super().__init__(coordinator, SENSOR_MQTT_STATUS)
+
+    @property
+    def native_value(self) -> str:
+        """Return the MQTT connection status."""
+        return "connected" if self.coordinator.mqtt_connected else "disconnected"

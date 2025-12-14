@@ -10,7 +10,6 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import (
     AquaTruApiClient,
@@ -21,6 +20,7 @@ from .api import (
 from .const import (
     CONF_COUNTRY_CODE,
     CONF_DEVICE_ID,
+    CONF_DEVICE_MAC,
     CONF_DEVICE_NAME,
     CONF_PHONE,
     DEFAULT_COUNTRY_CODE,
@@ -47,20 +47,18 @@ async def validate_input(
     hass: HomeAssistant, data: dict[str, Any]
 ) -> tuple[dict[str, Any], list[AquaTruDevice]]:
     """Validate the user input allows us to connect."""
-    session = async_get_clientsession(hass)
+    # Don't use shared session - it has DNS resolution issues
     client = AquaTruApiClient(
         phone=data[CONF_PHONE],
         password=data[CONF_PASSWORD],
         country_code=data.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE),
-        session=session,
     )
 
     try:
         await client.async_login()
         devices = await client.async_get_devices()
     finally:
-        # Don't close session as it's shared
-        pass
+        await client.close()
 
     if not devices:
         raise NoDevicesError("No AquaTru devices found")
@@ -122,6 +120,7 @@ class AquaTruConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             CONF_COUNTRY_CODE: self._country_code,
                             CONF_DEVICE_ID: device.device_id,
                             CONF_DEVICE_NAME: device.name,
+                            CONF_DEVICE_MAC: device.mac_address,
                         },
                     )
 
@@ -153,6 +152,7 @@ class AquaTruConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_COUNTRY_CODE: self._country_code,
                         CONF_DEVICE_ID: device.device_id,
                         CONF_DEVICE_NAME: device.name,
+                        CONF_DEVICE_MAC: device.mac_address,
                     },
                 )
 
