@@ -1,0 +1,125 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AquaTru Login",
+        "description": "Enter your AquaTru account credentials. These are the same credentials you use in the AquaTru mobile app.",
+        "data": {
+          "phone": "Phone Number",
+          "password": "Password",
+          "country_code": "Country Code"
+        },
+        "data_description": {
+          "phone": "Enter your phone number without country prefix (e.g., 5551234567)",
+          "country_code": "Two-letter country code (e.g., US, CA)"
+        }
+      },
+      "device": {
+        "title": "Select Device",
+        "description": "Select the AquaTru device you want to add.",
+        "data": {
+          "device_id": "Device"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate",
+        "description": "Please enter your password to re-authenticate with AquaTru.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_credentials": "Invalid email or password",
+      "cannot_connect": "Unable to connect to AquaTru servers",
+      "no_devices": "No AquaTru devices found on this account",
+      "unknown": "An unexpected error occurred"
+    },
+    "abort": {
+      "already_configured": "This account is already configured",
+      "reauth_successful": "Re-authentication successful"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "tds_tap": {
+        "name": "Tap Water TDS"
+      },
+      "tds_clean": {
+        "name": "Clean Water TDS"
+      },
+      "tds_reduction": {
+        "name": "TDS Reduction"
+      },
+      "filter_pre": {
+        "name": "Pre-Filter Life"
+      },
+      "filter_ro": {
+        "name": "RO Filter Life"
+      },
+      "filter_voc": {
+        "name": "VOC Filter Life"
+      },
+      "usage_daily": {
+        "name": "Daily Water Usage"
+      },
+      "usage_weekly": {
+        "name": "Weekly Water Usage"
+      },
+      "usage_monthly": {
+        "name": "Monthly Water Usage"
+      },
+      "usage_total": {
+        "name": "Total Water Filtered"
+      },
+      "money_saved": {
+        "name": "Money Saved"
+      },
+      "bottles_saved": {
+        "name": "Bottles Saved"
+      },
+      "connection_status": {
+        "name": "Connection Status",
+        "state": {
+          "connected": "Connected",
+          "disconnected": "Disconnected"
+        }
+      },
+      "filtration_time": {
+        "name": "Filtration Time"
+      },
+      "wifi_network": {
+        "name": "WiFi Network"
+      },
+      "wifi_version": {
+        "name": "WiFi Version"
+      },
+      "mcu_version": {
+        "name": "MCU Version"
+      }
+    },
+    "binary_sensor": {
+      "is_filtering": {
+        "name": "Filtering"
+      },
+      "clean_tank_full": {
+        "name": "Clean Tank Full"
+      },
+      "tap_removed": {
+        "name": "Tap Tank Removed"
+      },
+      "tap_near_end": {
+        "name": "Tap Tank Low"
+      },
+      "clean_removed": {
+        "name": "Clean Tank Removed"
+      },
+      "synced": {
+        "name": "Purifier Synced"
+      },
+      "cover_up": {
+        "name": "Cover Open"
+      }
+    }
+  }
+}
