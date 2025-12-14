@@ -187,6 +187,33 @@ class AquaTruMqttClient:
                 self._reconnect_task = asyncio.create_task(self._async_reconnect())
             return False
 
+    def _build_mqtt_connection(self) -> mqtt.Connection:
+        """Build MQTT connection (runs in executor to avoid blocking)."""
+        # Create credentials provider
+        credentials_provider = auth.AwsCredentialsProvider.new_static(
+            access_key_id=self._credentials.access_key_id,
+            secret_access_key=self._credentials.secret_key,
+            session_token=self._credentials.session_token,
+        )
+
+        # Set up event loop for AWS CRT
+        event_loop_group = io.EventLoopGroup(num_threads=1)
+        host_resolver = io.DefaultHostResolver(event_loop_group)
+        client_bootstrap = io.ClientBootstrap(event_loop_group, host_resolver)
+
+        # Build MQTT connection using WebSocket with AWS credentials
+        return mqtt_connection_builder.websockets_with_default_aws_signing(
+            endpoint=self._aws_settings.iot_endpoint,
+            region=self._aws_settings.region,
+            credentials_provider=credentials_provider,
+            client_bootstrap=client_bootstrap,
+            client_id=f"aquatru-ha-{self._device_mac}",
+            clean_session=True,
+            keep_alive_secs=30,
+            on_connection_interrupted=self._on_connection_interrupted,
+            on_connection_resumed=self._on_connection_resumed,
+        )
+
     async def _async_connect_with_credentials(self) -> bool:
         """Connect to MQTT using current credentials."""
         if not self._credentials:
@@ -194,29 +221,10 @@ class AquaTruMqttClient:
             return False
 
         try:
-            # Create credentials provider
-            credentials_provider = auth.AwsCredentialsProvider.new_static(
-                access_key_id=self._credentials.access_key_id,
-                secret_access_key=self._credentials.secret_key,
-                session_token=self._credentials.session_token,
-            )
-
-            # Set up event loop for AWS CRT
-            event_loop_group = io.EventLoopGroup(num_threads=1)
-            host_resolver = io.DefaultHostResolver(event_loop_group)
-            client_bootstrap = io.ClientBootstrap(event_loop_group, host_resolver)
-
-            # Build MQTT connection using WebSocket with AWS credentials
-            self._mqtt_connection = mqtt_connection_builder.websockets_with_default_aws_signing(
-                endpoint=self._aws_settings.iot_endpoint,
-                region=self._aws_settings.region,
-                credentials_provider=credentials_provider,
-                client_bootstrap=client_bootstrap,
-                client_id=f"aquatru-ha-{self._device_mac}",
-                clean_session=True,
-                keep_alive_secs=30,
-                on_connection_interrupted=self._on_connection_interrupted,
-                on_connection_resumed=self._on_connection_resumed,
+            # Build connection in executor to avoid blocking calls
+            loop = asyncio.get_event_loop()
+            self._mqtt_connection = await loop.run_in_executor(
+                None, self._build_mqtt_connection
             )
 
             # Connect
@@ -224,7 +232,6 @@ class AquaTruMqttClient:
             connect_future = self._mqtt_connection.connect()
 
             # Run in executor since awscrt uses its own event loop
-            loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, connect_future.result)
 
             self._connected = True
