@@ -6,10 +6,12 @@
         "description": "Enter your AquaTru account credentials. These are the same credentials you use in the AquaTru mobile app.",
         "data": {
           "phone": "Phone Number",
-          "password": "Password"
+          "password": "Password",
+          "country_code": "Country Code"
         },
         "data_description": {
-          "phone": "Enter your phone number in international format (e.g., +15551234567)"
+          "phone": "Enter your phone number in international format (e.g., +15551234567)",
+          "country_code": "Two-letter country code (e.g., US, CA)"
         }
       },
       "device": {

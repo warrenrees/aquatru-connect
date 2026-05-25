@@ -1,6 +1,8 @@
 """Test the AquaTru binary sensor platform."""
 from __future__ import annotations
 
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -23,7 +25,7 @@ async def test_binary_sensors_created(
     """Test that binary sensors are created correctly."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -93,7 +95,7 @@ async def test_binary_sensor_filtering_on(
     # Modify device data to have filtering on
     mock_device_data.is_filtering = True
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -147,7 +149,7 @@ async def test_binary_sensor_clean_tank_full(
     # Modify device data
     mock_device_data.is_clean_tank_full = True
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -203,7 +205,7 @@ async def test_binary_sensor_problem_states(
     mock_device_data.is_tap_near_end = True
     mock_device_data.is_clean_removed = True
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -265,7 +267,7 @@ async def test_binary_sensor_cover_open(
 
     mock_device_data.is_cover_up = True
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,

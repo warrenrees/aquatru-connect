@@ -2,6 +2,51 @@
 
 ### [Unreleased]
 
+### v1.1.2
+
+#### Fixed
+- **Daily Water Usage, Weekly Water Usage, and Money Saved** no longer show "Unknown".
+  - Usage statistics now match the current period and fall back to the most recent
+    period the API returns, instead of failing when the API omits the current day
+    or formats the ISO week differently than expected.
+  - Money Saved is now computed locally (the cloud returns `dollarsSaved: null`),
+    matching the AquaTru app: `bottles = ceil(purifiedAmount / bottleSize)` and
+    `money = (purifiedAmount / bottleSize / quantityInPack) * waterCost`.
+- **Bottles Saved** now matches the value shown in the AquaTru app. It is derived
+  from total water purified and the configured bottle size; the cloud's
+  `bottleSaved` field uses a different bottle size and under-reported the count.
+- Reworked MQTT reconnection so it no longer races the AWS IoT SDK's built-in
+  auto-reconnect (which previously could create duplicate connections); a connect
+  lock now serializes connection rebuilds.
+- Credential refresh now also runs while temporarily disconnected, so an expiry
+  that coincides with a dropped connection can recover (previously it could get
+  stuck retrying with expired credentials).
+- Removed unreachable authentication-error handling during setup; auth failures
+  correctly trigger the re-authentication flow.
+- Synced `strings.json` and `translations/en.json` and added the missing
+  Country Code field labels to the login step.
+
+#### Changed (Home Assistant standards)
+- Removed `aiohttp` from manifest requirements (it is provided by Home Assistant core).
+- Added `PARALLEL_UPDATES = 0` to the sensor and binary sensor platforms.
+- Replaced deprecated `asyncio.get_event_loop()` with `asyncio.get_running_loop()`.
+- Demoted routine operational logs from INFO to DEBUG.
+- Diagnostics now use a public coordinator property instead of accessing internals.
+- The device model shown in Home Assistant now reflects the actual device model
+  instead of a hardcoded value.
+- Timestamps are now timezone-aware; modernized `datetime` usage.
+
+#### Removed
+- Dead `access_token` plumbing in the MQTT client (Cognito uses an unauthenticated
+  identity, so the token was never sent).
+- 27 unused constants.
+
+#### Internal / tests
+- Migrated the test suite to `MockConfigEntry`, added the required
+  `enable_custom_integrations` fixture, and updated mocks/assertions for the
+  current Home Assistant version. Full suite passing (77 tests).
+- Applied `ruff` autofixes (import sorting, unused-import removal, pyupgrade).
+
 ### v1.1.1
 - Reduced cloud polling frequency: 10 minutes primary (was 1 minute), 6 hours with MQTT active (was 5 minutes)
 - Fixed MQTT callbacks not updating Home Assistant entities (stored event loop reference for thread-safe callbacks from AWS SDK threads)

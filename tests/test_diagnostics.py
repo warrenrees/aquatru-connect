@@ -1,6 +1,8 @@
 """Test the AquaTru diagnostics."""
 from __future__ import annotations
 
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -27,7 +29,7 @@ async def test_diagnostics_redaction(
     """Test that sensitive data is redacted."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -90,7 +92,7 @@ async def test_diagnostics_without_data(
     """Test diagnostics when coordinator has no data."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -143,7 +145,7 @@ async def test_diagnostics_mqtt_credentials(
     from homeassistant import config_entries
     from datetime import datetime, timezone
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,

@@ -30,7 +30,7 @@ class AquaTruEntity(CoordinatorEntity[AquaTruDataUpdateCoordinator]):
             identifiers={(DOMAIN, self.coordinator.device_id)},
             name=self.coordinator.device_name,
             manufacturer="AquaTru",
-            model="Classic Smart",
+            model=self.coordinator.device_model or "Classic Smart",
         )
 
         # Add firmware versions if available

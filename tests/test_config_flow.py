@@ -1,6 +1,8 @@
 """Test the AquaTru config flow."""
 from __future__ import annotations
 
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -18,6 +20,7 @@ from custom_components.aquatru.const import (
     CONF_COUNTRY_CODE,
     CONF_DEVICE_ID,
     CONF_DEVICE_MAC,
+    CONF_DEVICE_MODEL,
     CONF_DEVICE_NAME,
     CONF_PHONE,
     DOMAIN,
@@ -52,6 +55,7 @@ async def test_form(hass: HomeAssistant, mock_api_client, mock_setup_entry) -> N
         CONF_COUNTRY_CODE: "US",
         CONF_DEVICE_ID: "test-device-id-123",
         CONF_DEVICE_NAME: "Test AquaTru",
+        CONF_DEVICE_MODEL: "Classic Smart",
         CONF_DEVICE_MAC: "48:3f:da:a3:8c:99",
     }
     assert len(mock_setup_entry.mock_calls) == 1
@@ -203,7 +207,7 @@ async def test_reauth_flow(
 ) -> None:
     """Test the reauth flow."""
     # Create a config entry
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,

@@ -1,15 +1,44 @@
-"""Data update coordinator for AquaTru."""
+"""Data update coordinator for AquaTru.
+
+Architecture Overview
+--------------------
+This module coordinates data updates between the API client, MQTT client,
+and Home Assistant entities. It serves as the central hub for device state.
+
+Update Strategy:
+    - Primary: MQTT real-time updates (when connected)
+    - Fallback: HTTP API polling (every 10 minutes normally, 6 hours with MQTT)
+
+MQTT Integration:
+    - Attempts MQTT connection after first successful API poll
+    - Receives real-time sensor data and device status updates
+    - Reduces polling frequency when MQTT is active
+
+Error Handling:
+    - Tracks consecutive API failures
+    - Creates repair issues after repeated failures
+    - Auth errors trigger re-authentication flow
+
+See Also:
+    - api.py: HTTP client for AquaTru cloud API
+    - mqtt.py: Real-time updates via AWS IoT
+    - sensor.py, binary_sensor.py: Entity implementations
+"""
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue, async_delete_issue
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import (
@@ -22,12 +51,14 @@ from .const import (
     CONF_COUNTRY_CODE,
     CONF_DEVICE_ID,
     CONF_DEVICE_MAC,
+    CONF_DEVICE_MODEL,
+    CONF_DEVICE_NAME,
     CONF_PHONE,
+    CONNECTION_FAILURE_THRESHOLD,
     DEFAULT_COUNTRY_CODE,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
-    MQTT_TOPIC_DEVICE_STATUS,
-    MQTT_TOPIC_SENSOR_DATA,
+    MQTT_FALLBACK_SCAN_INTERVAL,
 )
 from .mqtt import (
     AquaTruMqttClient,
@@ -38,14 +69,8 @@ from .mqtt import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Longer polling interval when MQTT is connected (fallback only)
-MQTT_FALLBACK_SCAN_INTERVAL = timedelta(hours=6)
-
 # Issue IDs
 ISSUE_CONNECTION_FAILED = "connection_failed"
-
-# Number of consecutive failures before creating an issue
-CONNECTION_FAILURE_THRESHOLD = 3
 
 
 class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
@@ -68,7 +93,10 @@ class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
             country_code=entry.data.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE),
         )
         self.device_id = entry.data[CONF_DEVICE_ID]
-        self.device_name = entry.data.get("device_name", f"AquaTru {self.device_id[:8]}")
+        self.device_name = entry.data.get(
+            CONF_DEVICE_NAME, f"AquaTru {self.device_id[:8]}"
+        )
+        self.device_model = entry.data.get(CONF_DEVICE_MODEL)
         self.device_mac = entry.data.get(CONF_DEVICE_MAC)
 
         # MQTT client for real-time updates
@@ -91,6 +119,13 @@ class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
         """Return True if MQTT is connected."""
         return self._mqtt_connected and self._mqtt_client is not None
 
+    @property
+    def mqtt_credentials_expiration(self) -> datetime | None:
+        """Return the MQTT credential expiration, if an MQTT client exists."""
+        if self._mqtt_client is None:
+            return None
+        return self._mqtt_client.credentials_expiration
+
     async def async_start_mqtt(self) -> bool:
         """Start MQTT connection for real-time updates."""
         # Get MAC address - either from config or from device data
@@ -102,10 +137,11 @@ class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
             _LOGGER.warning("No MAC address available for MQTT connection")
             return False
 
-        # Get access token from API client
-        access_token = self.client.access_token
-        if not access_token:
-            _LOGGER.warning("No access token available for MQTT connection")
+        # Only attempt MQTT once the API client has authenticated. The token
+        # itself is not needed for the (unauthenticated) Cognito identity used
+        # by the MQTT client; this is purely a "are we logged in yet?" gate.
+        if not self.client.access_token:
+            _LOGGER.debug("Not authenticated yet, deferring MQTT connection")
             return False
 
         try:
@@ -129,7 +165,6 @@ class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
             # session with ThreadedResolver for reliable DNS resolution
             self._mqtt_client = AquaTruMqttClient(
                 device_mac=mac_address,
-                access_token=access_token,
                 aws_settings=aws_settings,
                 on_message=self._on_mqtt_message,
             )
@@ -139,7 +174,7 @@ class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
                 self._mqtt_connected = True
                 # Reduce polling interval since we have real-time updates
                 self.update_interval = MQTT_FALLBACK_SCAN_INTERVAL
-                _LOGGER.info("MQTT connected, reduced polling to %s", MQTT_FALLBACK_SCAN_INTERVAL)
+                _LOGGER.debug("MQTT connected, reduced polling to %s", MQTT_FALLBACK_SCAN_INTERVAL)
                 return True
             else:
                 _LOGGER.warning("Failed to connect to MQTT")
@@ -186,7 +221,7 @@ class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
                     self.data.mcu_version = payload["version"]
                     self.async_set_updated_data(self.data)
             elif event_type == "WELCOME":
-                _LOGGER.info("Device welcomed on MQTT")
+                _LOGGER.debug("Device welcomed on MQTT")
 
         except Exception as err:
             _LOGGER.error("Error processing MQTT message: %s", err)
@@ -220,7 +255,7 @@ class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
 
             # Try to start MQTT if not connected
             if not self._mqtt_connected and self.device_mac:
-                _LOGGER.info("Attempting to start MQTT connection...")
+                _LOGGER.debug("Attempting to start MQTT connection...")
                 await self.async_start_mqtt()
 
             # Success - reset failure counter and clear any connection issues
@@ -259,7 +294,7 @@ class AquaTruDataUpdateCoordinator(DataUpdateCoordinator[AquaTruDeviceData]):
         """Shutdown the coordinator."""
         # Disconnect MQTT
         if self._mqtt_client:
-            _LOGGER.info("Disconnecting MQTT...")
+            _LOGGER.debug("Disconnecting MQTT...")
             await self._mqtt_client.async_disconnect()
             self._mqtt_client = None
             self._mqtt_connected = False

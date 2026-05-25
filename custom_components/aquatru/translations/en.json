@@ -10,7 +10,7 @@
           "country_code": "Country Code"
         },
         "data_description": {
-          "phone": "Enter your phone number without country prefix (e.g., 5551234567)",
+          "phone": "Enter your phone number in international format (e.g., +15551234567)",
           "country_code": "Two-letter country code (e.g., US, CA)"
         }
       },
@@ -54,6 +54,29 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "is_filtering": {
+        "name": "Filtering"
+      },
+      "clean_tank_full": {
+        "name": "Clean Tank Full"
+      },
+      "tap_removed": {
+        "name": "Tap Tank Removed"
+      },
+      "tap_near_end": {
+        "name": "Tap Tank Low"
+      },
+      "clean_removed": {
+        "name": "Clean Tank Removed"
+      },
+      "synced": {
+        "name": "Purifier Synced"
+      },
+      "cover_up": {
+        "name": "Cover Open"
+      }
+    },
     "sensor": {
       "tds_tap": {
         "name": "Tap Water TDS"
@@ -116,29 +139,6 @@
           "connected": "Connected",
           "disconnected": "Disconnected"
         }
-      }
-    },
-    "binary_sensor": {
-      "is_filtering": {
-        "name": "Filtering"
-      },
-      "clean_tank_full": {
-        "name": "Clean Tank Full"
-      },
-      "tap_removed": {
-        "name": "Tap Tank Removed"
-      },
-      "tap_near_end": {
-        "name": "Tap Tank Low"
-      },
-      "clean_removed": {
-        "name": "Clean Tank Removed"
-      },
-      "synced": {
-        "name": "Purifier Synced"
-      },
-      "cover_up": {
-        "name": "Cover Open"
       }
     }
   },

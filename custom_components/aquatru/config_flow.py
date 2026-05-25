@@ -5,7 +5,6 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD
 from homeassistant.core import HomeAssistant
@@ -21,11 +20,11 @@ from .const import (
     CONF_COUNTRY_CODE,
     CONF_DEVICE_ID,
     CONF_DEVICE_MAC,
+    CONF_DEVICE_MODEL,
     CONF_DEVICE_NAME,
     CONF_PHONE,
     DEFAULT_COUNTRY_CODE,
     DOMAIN,
-    ERROR_AUTH_FAILED,
     ERROR_CANNOT_CONNECT,
     ERROR_INVALID_CREDENTIALS,
     ERROR_NO_DEVICES,
@@ -72,6 +71,35 @@ class NoDevicesError(Exception):
     """No devices found error."""
 
 
+async def _validate_with_error_handling(
+    hass: HomeAssistant, data: dict[str, Any]
+) -> tuple[bool, dict[str, str], list[AquaTruDevice]]:
+    """Validate input and return (success, errors, devices).
+
+    Returns:
+        Tuple of (success, errors_dict, devices_list).
+        If success is True, errors will be empty and devices will have the device list.
+        If success is False, errors will contain the error key and devices will be empty.
+    """
+    errors: dict[str, str] = {}
+    devices: list[AquaTruDevice] = []
+
+    try:
+        _, devices = await validate_input(hass, data)
+        return (True, errors, devices)
+    except AquaTruAuthError:
+        errors["base"] = ERROR_INVALID_CREDENTIALS
+    except AquaTruConnectionError:
+        errors["base"] = ERROR_CANNOT_CONNECT
+    except NoDevicesError:
+        errors["base"] = ERROR_NO_DEVICES
+    except Exception:  # pylint: disable=broad-except
+        _LOGGER.exception("Unexpected exception")
+        errors["base"] = ERROR_UNKNOWN
+
+    return (False, errors, devices)
+
+
 class AquaTruConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for AquaTru."""
 
@@ -95,18 +123,11 @@ class AquaTruConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._password = user_input[CONF_PASSWORD]
             self._country_code = user_input.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE)
 
-            try:
-                info, self._devices = await validate_input(self.hass, user_input)
-            except AquaTruAuthError:
-                errors["base"] = ERROR_INVALID_CREDENTIALS
-            except AquaTruConnectionError:
-                errors["base"] = ERROR_CANNOT_CONNECT
-            except NoDevicesError:
-                errors["base"] = ERROR_NO_DEVICES
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception("Unexpected exception")
-                errors["base"] = ERROR_UNKNOWN
-            else:
+            success, errors, self._devices = await _validate_with_error_handling(
+                self.hass, user_input
+            )
+
+            if success:
                 # Check if we already have an entry for this phone
                 await self.async_set_unique_id(self._phone)
                 self._abort_if_unique_id_configured()
@@ -122,6 +143,7 @@ class AquaTruConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             CONF_COUNTRY_CODE: self._country_code,
                             CONF_DEVICE_ID: device.device_id,
                             CONF_DEVICE_NAME: device.name,
+                            CONF_DEVICE_MODEL: device.model,
                             CONF_DEVICE_MAC: device.mac_address,
                         },
                     )
@@ -154,6 +176,7 @@ class AquaTruConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_COUNTRY_CODE: self._country_code,
                         CONF_DEVICE_ID: device.device_id,
                         CONF_DEVICE_NAME: device.name,
+                        CONF_DEVICE_MODEL: device.model,
                         CONF_DEVICE_MAC: device.mac_address,
                     },
                 )
@@ -187,25 +210,16 @@ class AquaTruConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             reauth_entry = self._get_reauth_entry()
 
-            try:
-                await validate_input(
-                    self.hass,
-                    {
-                        CONF_PHONE: reauth_entry.data[CONF_PHONE],
-                        CONF_PASSWORD: user_input[CONF_PASSWORD],
-                        CONF_COUNTRY_CODE: reauth_entry.data.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE),
-                    },
-                )
-            except AquaTruAuthError:
-                errors["base"] = ERROR_INVALID_CREDENTIALS
-            except AquaTruConnectionError:
-                errors["base"] = ERROR_CANNOT_CONNECT
-            except NoDevicesError:
-                errors["base"] = ERROR_NO_DEVICES
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception("Unexpected exception")
-                errors["base"] = ERROR_UNKNOWN
-            else:
+            success, errors, _ = await _validate_with_error_handling(
+                self.hass,
+                {
+                    CONF_PHONE: reauth_entry.data[CONF_PHONE],
+                    CONF_PASSWORD: user_input[CONF_PASSWORD],
+                    CONF_COUNTRY_CODE: reauth_entry.data.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE),
+                },
+            )
+
+            if success:
                 return self.async_update_reload_and_abort(
                     reauth_entry,
                     data_updates={CONF_PASSWORD: user_input[CONF_PASSWORD]},
@@ -225,25 +239,16 @@ class AquaTruConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         reconfigure_entry = self._get_reconfigure_entry()
 
         if user_input is not None:
-            try:
-                await validate_input(
-                    self.hass,
-                    {
-                        CONF_PHONE: user_input[CONF_PHONE],
-                        CONF_PASSWORD: user_input[CONF_PASSWORD],
-                        CONF_COUNTRY_CODE: user_input.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE),
-                    },
-                )
-            except AquaTruAuthError:
-                errors["base"] = ERROR_INVALID_CREDENTIALS
-            except AquaTruConnectionError:
-                errors["base"] = ERROR_CANNOT_CONNECT
-            except NoDevicesError:
-                errors["base"] = ERROR_NO_DEVICES
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception("Unexpected exception")
-                errors["base"] = ERROR_UNKNOWN
-            else:
+            success, errors, _ = await _validate_with_error_handling(
+                self.hass,
+                {
+                    CONF_PHONE: user_input[CONF_PHONE],
+                    CONF_PASSWORD: user_input[CONF_PASSWORD],
+                    CONF_COUNTRY_CODE: user_input.get(CONF_COUNTRY_CODE, DEFAULT_COUNTRY_CODE),
+                },
+            )
+
+            if success:
                 return self.async_update_reload_and_abort(
                     reconfigure_entry,
                     data_updates={

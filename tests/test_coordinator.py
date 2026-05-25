@@ -1,6 +1,8 @@
 """Test the AquaTru data update coordinator."""
 from __future__ import annotations
 
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -32,7 +34,7 @@ async def test_coordinator_setup(
     """Test coordinator setup."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -71,7 +73,7 @@ async def test_coordinator_auth_failure(
     """Test coordinator handles auth failure."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -112,8 +114,10 @@ async def test_coordinator_auth_failure(
             result = await hass.config_entries.async_setup(entry.entry_id)
             await hass.async_block_till_done()
 
-            # Entry should be in setup retry state
-            assert entry.state == ConfigEntryState.SETUP_RETRY
+            # Auth errors raise ConfigEntryAuthFailed, which puts the entry in
+            # SETUP_ERROR and triggers a reauth flow (SETUP_RETRY is reserved for
+            # ConfigEntryNotReady / connection errors).
+            assert entry.state == ConfigEntryState.SETUP_ERROR
 
 
 async def test_coordinator_connection_failure(
@@ -122,7 +126,7 @@ async def test_coordinator_connection_failure(
     """Test coordinator handles connection failure."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -173,7 +177,7 @@ async def test_coordinator_mqtt_connection(
     """Test coordinator starts MQTT connection."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -216,7 +220,7 @@ async def test_coordinator_data_update(
     """Test coordinator data updates."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -259,7 +263,7 @@ async def test_coordinator_shutdown(
     """Test coordinator shutdown disconnects MQTT."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -305,7 +309,7 @@ async def test_coordinator_mqtt_message_handling(
     from homeassistant import config_entries
     from custom_components.aquatru.coordinator import AquaTruDataUpdateCoordinator
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,

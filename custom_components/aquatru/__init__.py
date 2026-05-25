@@ -1,19 +1,13 @@
 """The AquaTru integration."""
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
 
-from .api import AquaTruAuthError, AquaTruConnectionError
-from .const import DOMAIN
 from .coordinator import AquaTruDataUpdateCoordinator
-
-_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR]
 
@@ -32,14 +26,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: AquaTruConfigEntry) -> b
     """Set up AquaTru from a config entry."""
     coordinator = AquaTruDataUpdateCoordinator(hass, entry)
 
-    try:
-        await coordinator.async_config_entry_first_refresh()
-    except AquaTruAuthError as err:
-        _LOGGER.error("Authentication failed: %s", err)
-        raise ConfigEntryNotReady(f"Authentication failed: {err}") from err
-    except AquaTruConnectionError as err:
-        _LOGGER.error("Connection failed: %s", err)
-        raise ConfigEntryNotReady(f"Connection failed: {err}") from err
+    # The coordinator raises ConfigEntryAuthFailed (-> reauth) on auth errors and
+    # UpdateFailed (-> ConfigEntryNotReady) on connection errors; first_refresh
+    # surfaces both correctly, so no extra handling is needed here.
+    await coordinator.async_config_entry_first_refresh()
 
     entry.runtime_data = AquaTruRuntimeData(coordinator=coordinator)
 

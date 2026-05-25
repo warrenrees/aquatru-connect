@@ -1,11 +1,14 @@
 """Test the AquaTru base entity."""
 from __future__ import annotations
 
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.aquatru.const import (
     CONF_COUNTRY_CODE,
@@ -24,7 +27,7 @@ async def test_entity_unique_id(
     """Test entity unique_id generation."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -59,7 +62,7 @@ async def test_entity_unique_id(
         assert state is not None
 
         # Get the entity registry to check unique_id
-        entity_registry = hass.helpers.entity_registry.async_get(hass)
+        entity_registry = er.async_get(hass)
         entity_entry = entity_registry.async_get("sensor.test_aquatru_tap_water_tds")
         assert entity_entry is not None
         assert entity_entry.unique_id == "test-device-id-123_tds_tap"
@@ -71,7 +74,7 @@ async def test_entity_device_info(
     """Test entity device_info."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -102,7 +105,7 @@ async def test_entity_device_info(
         await hass.async_block_till_done()
 
         # Get device registry
-        device_registry = hass.helpers.device_registry.async_get(hass)
+        device_registry = dr.async_get(hass)
 
         # Find the device
         device = device_registry.async_get_device(
@@ -120,7 +123,7 @@ async def test_entity_availability(
     """Test entity availability."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -162,7 +165,7 @@ async def test_entity_firmware_versions(
     """Test entity device info includes firmware versions."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -193,7 +196,7 @@ async def test_entity_firmware_versions(
         await hass.async_block_till_done()
 
         # Get device registry
-        device_registry = hass.helpers.device_registry.async_get(hass)
+        device_registry = dr.async_get(hass)
 
         # Find the device
         device = device_registry.async_get_device(

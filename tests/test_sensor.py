@@ -1,6 +1,8 @@
 """Test the AquaTru sensor platform."""
 from __future__ import annotations
 
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -24,7 +26,7 @@ async def test_sensors_created(
     """Test that sensors are created correctly."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,
@@ -69,7 +71,9 @@ async def test_sensors_created(
 
         state = hass.states.get("sensor.test_aquatru_total_water_filtered")
         assert state is not None
-        assert state.state == "500.0"
+        # Native value is 500 US gallons; HA's default (metric) unit system
+        # auto-converts the WATER device class to liters for display.
+        assert float(state.state) == pytest.approx(500 * 3.785411784, abs=0.5)
 
 
 async def test_tds_reduction_calculation(
@@ -78,7 +82,7 @@ async def test_tds_reduction_calculation(
     """Test that TDS reduction is calculated correctly."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,

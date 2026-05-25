@@ -1,30 +1,43 @@
-"""API client for AquaTru water purifiers."""
+"""API client for AquaTru water purifiers.
+
+Architecture Overview
+--------------------
+This module provides the HTTP API client for communicating with the AquaTru cloud
+service. It handles authentication, token refresh, and data retrieval.
+
+Data Flow:
+    1. Login: Phone/password authentication returns access token and dashboard data
+    2. Dashboard data: Contains device list and initial sensor readings
+    3. Polling: Subsequent calls to /user/purifiers refresh device data
+    4. Statistics: Separate endpoint for daily/weekly/monthly usage
+
+The client can work standalone or with a provided aiohttp session. When no
+session is provided, it creates one with ThreadedResolver for reliable DNS
+resolution on embedded devices.
+
+See Also:
+    - coordinator.py: Uses this client for Home Assistant data updates
+    - mqtt.py: Real-time updates that supplement API polling
+"""
 from __future__ import annotations
 
-import asyncio
 import logging
+import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import aiohttp
-from aiohttp.resolver import ThreadedResolver
 
 from .const import (
     API_BASE_URL,
+    API_TIMEOUT_SECONDS,
     DEFAULT_COUNTRY_CODE,
-    ENDPOINT_CONNECTION_STATUS,
-    ENDPOINT_GRAPH,
     ENDPOINT_LOGIN,
     ENDPOINT_PURIFIERS,
-    ENDPOINT_PURIFIERS_LIST,
     ENDPOINT_REFRESH_TOKEN,
-    ENDPOINT_SAVINGS,
-    ENDPOINT_SETTINGS,
-    FILTER_PRE,
-    FILTER_RO,
-    FILTER_VOC,
 )
+from .session import create_session
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -148,9 +161,7 @@ class AquaTruApiClient:
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure we have an active session."""
         if self._session is None or self._session.closed:
-            # Use ThreadedResolver to avoid aiodns issues in Home Assistant
-            connector = aiohttp.TCPConnector(resolver=ThreadedResolver())
-            self._session = aiohttp.ClientSession(connector=connector)
+            self._session = create_session()
             self._close_session = True
         return self._session
 
@@ -160,14 +171,29 @@ class AquaTruApiClient:
             await self._session.close()
 
     def _get_headers(self, include_auth: bool = True, use_bearer: bool = True) -> dict[str, str]:
-        """Get request headers."""
+        """Get request headers.
+
+        The AquaTru API uses two different authorization header formats depending
+        on the endpoint:
+
+        Bearer token format (use_bearer=True, default):
+            Authorization: Bearer <token>
+            Used for: auth/refreshToken, auth/getSettings, and most internal endpoints
+
+        Raw token format (use_bearer=False):
+            authorization: <token>  (lowercase header name, no Bearer prefix)
+            Used for: user/purifiers, user/purifiers/{id}/statistic, and other
+            user-facing data endpoints
+
+        This quirk was discovered through traffic analysis of the mobile app.
+        Using the wrong format will result in 401 Unauthorized errors.
+        """
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
             "User-Agent": "Dart/3.6 (dart:io)",
         }
         if include_auth and self._access_token:
-            # Some endpoints use Bearer prefix, others use raw token
             if use_bearer:
                 headers["Authorization"] = f"Bearer {self._access_token}"
             else:
@@ -190,7 +216,7 @@ class AquaTruApiClient:
 
         try:
             async with session.request(
-                method, url, json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=30)
+                method, url, json=data, headers=headers, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT_SECONDS)
             ) as response:
                 try:
                     response_data = await response.json()
@@ -221,7 +247,7 @@ class AquaTruApiClient:
         except aiohttp.ClientError as err:
             _LOGGER.error("Connection error: %s", err)
             raise AquaTruConnectionError(f"Connection failed: {err}") from err
-        except asyncio.TimeoutError as err:
+        except TimeoutError as err:
             _LOGGER.error("Request timeout for %s", endpoint)
             raise AquaTruConnectionError("Request timed out") from err
 
@@ -283,9 +309,9 @@ class AquaTruApiClient:
                     expiration_date.replace("Z", "+00:00")
                 )
             except ValueError:
-                self._token_expiry = datetime.now(timezone.utc) + timedelta(hours=24)
+                self._token_expiry = datetime.now(UTC) + timedelta(hours=24)
         else:
-            self._token_expiry = datetime.now(timezone.utc) + timedelta(hours=24)
+            self._token_expiry = datetime.now(UTC) + timedelta(hours=24)
 
         if not self._access_token:
             _LOGGER.error("No access token in login response: %s", response)
@@ -320,7 +346,7 @@ class AquaTruApiClient:
                 self._refresh_token = new_refresh
 
             expires_in = data.get("expiresIn", data.get("expires_in", 3600))
-            self._token_expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+            self._token_expiry = datetime.now(UTC) + timedelta(seconds=expires_in)
 
             _LOGGER.debug("Token refreshed successfully")
             return True
@@ -346,7 +372,7 @@ class AquaTruApiClient:
 
         try:
             async with session.get(
-                url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)
+                url, headers=headers, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT_SECONDS)
             ) as response:
                 if response.status != 200:
                     _LOGGER.warning("Failed to get settings: %s", response.status)
@@ -390,7 +416,7 @@ class AquaTruApiClient:
             return await self.async_login()
 
         # Refresh if token expires in less than 5 minutes
-        if self._token_expiry and datetime.now(timezone.utc) >= self._token_expiry - timedelta(minutes=5):
+        if self._token_expiry and datetime.now(UTC) >= self._token_expiry - timedelta(minutes=5):
             return await self._refresh_auth_token()
 
         return True
@@ -487,23 +513,16 @@ class AquaTruApiClient:
                 use_bearer=False,
             )
 
-            _LOGGER.debug("Got purifiers response: %s", type(response))
-
             # Response is a list of purifiers
             if isinstance(response, list):
-                _LOGGER.debug("Looking for device_id=%s in %d purifiers", device_id, len(response))
                 for purifier in response:
-                    purifier_id = purifier.get("id")
-                    _LOGGER.debug("Comparing: purifier_id=%s (type=%s) vs device_id=%s (type=%s)",
-                                  purifier_id, type(purifier_id).__name__, device_id, type(device_id).__name__)
-                    if purifier_id == device_id:
+                    if purifier.get("id") == device_id:
                         self._parse_dashboard_purifier(purifier, device_data)
-                        _LOGGER.debug("Parsed device data for %s", device_id)
                         break
                 else:
                     _LOGGER.warning("Device %s not found in purifiers list", device_id)
             else:
-                _LOGGER.warning("Unexpected response type: %s", type(response))
+                _LOGGER.warning("Unexpected purifiers response type: %s", type(response))
         except AquaTruApiError as err:
             _LOGGER.warning("Failed to get purifier data: %s", err)
         except Exception as err:
@@ -515,7 +534,7 @@ class AquaTruApiClient:
         except Exception as err:
             _LOGGER.warning("Failed to fetch usage statistics: %s", err)
 
-        device_data.last_updated = datetime.now()
+        device_data.last_updated = datetime.now(UTC)
         return device_data
 
     async def _fetch_usage_statistics(
@@ -526,31 +545,58 @@ class AquaTruApiClient:
 
         # Get daily stats (last 7 days, find today's usage)
         daily_stats = await self.async_get_statistics(device_id, "day", 7)
-        today_str = today.strftime("%Y-%m-%d")
-        for stat in daily_stats:
-            if stat.get("period") == today_str:
-                device_data.daily_usage = self._safe_float(stat.get("amount"))
-                break
+        device_data.daily_usage = self._select_period_usage(
+            daily_stats, today.strftime("%Y-%m-%d")
+        )
 
         # Get weekly stats (last 4 weeks, find this week's usage)
         weekly_stats = await self.async_get_statistics(device_id, "week", 4)
-        # Week format is YYYY-WW (ISO week number), use %G-%V for ISO week
-        current_week = today.strftime("%G-%V")
-        for stat in weekly_stats:
-            if stat.get("period") == current_week:
-                device_data.weekly_usage = self._safe_float(stat.get("amount"))
-                break
+        device_data.weekly_usage = self._select_period_usage(
+            weekly_stats, today.strftime("%G-%V")
+        )
 
         # Get monthly stats (last 3 months, find this month's usage)
         monthly_stats = await self.async_get_statistics(device_id, "month", 3)
-        current_month = today.strftime("%Y-%m")
-        for stat in monthly_stats:
-            if stat.get("period") == current_month:
-                device_data.monthly_usage = self._safe_float(stat.get("amount"))
-                break
+        device_data.monthly_usage = self._select_period_usage(
+            monthly_stats, today.strftime("%Y-%m")
+        )
 
         _LOGGER.debug("Usage stats: daily=%s, weekly=%s, monthly=%s",
                       device_data.daily_usage, device_data.weekly_usage, device_data.monthly_usage)
+
+    @staticmethod
+    def _select_period_usage(
+        stats: list[dict[str, Any]], current_period: str
+    ) -> float | None:
+        """Return the usage amount for the current period from a stats list.
+
+        The ``/statistic`` endpoint returns a list of ``{"period", "amount"}``
+        entries. We prefer an exact match on ``current_period``, but the API may
+        omit the current period entirely (e.g. no usage logged yet today) or
+        format it differently than our computed string (this is why the weekly
+        ISO-week format in particular often failed to match). In those cases we
+        fall back to the most recent period present so the sensor reports a real
+        value instead of "unknown".
+        """
+        by_period: dict[str, Any] = {
+            str(s.get("period")): s.get("amount")
+            for s in stats
+            if isinstance(s, dict) and s.get("period") is not None
+        }
+        if not by_period:
+            return None
+
+        _LOGGER.debug(
+            "Stats periods available: %s (looking for %s)",
+            sorted(by_period), current_period,
+        )
+
+        if current_period in by_period:
+            return AquaTruApiClient._safe_float(by_period[current_period])
+
+        # Periods are ISO-style strings, so the lexicographic max is the latest.
+        latest_period = max(by_period)
+        return AquaTruApiClient._safe_float(by_period[latest_period])
 
     def _parse_dashboard_purifier(
         self, data: dict[str, Any], device_data: AquaTruDeviceData
@@ -583,12 +629,34 @@ class AquaTruApiClient:
         device_data.total_usage = self._safe_float(data.get("purifiedAmount"))
         device_data.filtration_time = self._safe_int(data.get("filtrationTime"))
 
-        # Money/bottle statistics
+        # Money/bottle statistics.
+        #
+        # The cloud returns moneyStatistic.dollarsSaved as null and its
+        # bottleSaved field uses a different bottle size than the app displays,
+        # so we replicate the app's own calculation from the raw inputs:
+        #   bottles saved = ceil(purifiedAmount / bottleSize)
+        #   money saved   = (purifiedAmount / bottleSize / quantityInPack)
+        #                     * waterCost            (waterCost = price per pack)
         money_stats = data.get("moneyStatistic", {})
-        device_data.bottles_saved = self._safe_int(money_stats.get("bottleSaved"))
-        device_data.money_saved = self._safe_float(money_stats.get("dollarsSaved"))
-        device_data.water_cost = self._safe_float(money_stats.get("waterCost"))
-        device_data.bottle_size = self._safe_float(money_stats.get("bottleSize"))
+        water_cost = self._safe_float(money_stats.get("waterCost"))
+        bottle_size = self._safe_float(money_stats.get("bottleSize"))
+        quantity_in_pack = self._safe_int(money_stats.get("quantityInPack"))
+        purified = self._safe_float(data.get("purifiedAmount"))
+
+        device_data.water_cost = water_cost
+        device_data.bottle_size = bottle_size
+
+        if purified is not None and bottle_size:
+            bottles_needed = purified / bottle_size
+            device_data.bottles_saved = math.ceil(bottles_needed)
+            if water_cost is not None and quantity_in_pack:
+                device_data.money_saved = round(
+                    bottles_needed / quantity_in_pack * water_cost, 2
+                )
+        else:
+            # Fall back to the cloud-provided values if we can't compute.
+            device_data.bottles_saved = self._safe_int(money_stats.get("bottleSaved"))
+            device_data.money_saved = self._safe_float(money_stats.get("dollarsSaved"))
 
         # Device status flags
         device_data.is_filtering = data.get("isFiltering", False)
@@ -613,79 +681,6 @@ class AquaTruApiClient:
                 )
             except ValueError:
                 pass
-
-    def _parse_purifier_data(
-        self, response: dict[str, Any], device_data: AquaTruDeviceData
-    ) -> None:
-        """Parse purifier data from API response."""
-        data = response.get("data", response)
-        if isinstance(data, list) and data:
-            data = data[0]
-
-        # TDS readings
-        device_data.tds_tap = self._safe_int(data.get("tdsTap") or data.get("tds_tap") or data.get("tapTds"))
-        device_data.tds_clean = self._safe_int(data.get("tdsClean") or data.get("tds_clean") or data.get("cleanTds"))
-
-        # Filter life percentages
-        filters = data.get("filtersLife") or data.get("filters") or {}
-        if isinstance(filters, dict):
-            device_data.filter_pre_life = self._safe_int(
-                filters.get(FILTER_PRE) or filters.get("preFilter") or filters.get("pre")
-            )
-            device_data.filter_ro_life = self._safe_int(
-                filters.get(FILTER_RO) or filters.get("roFilter") or filters.get("ro") or filters.get("reverse")
-            )
-            device_data.filter_voc_life = self._safe_int(
-                filters.get(FILTER_VOC) or filters.get("vocFilter") or filters.get("voc")
-            )
-        else:
-            # Try direct fields
-            device_data.filter_pre_life = self._safe_int(data.get("preFilterLife"))
-            device_data.filter_ro_life = self._safe_int(data.get("roFilterLife") or data.get("revFilterLife"))
-            device_data.filter_voc_life = self._safe_int(data.get("vocFilterLife"))
-
-        # Connection status
-        device_data.is_connected = data.get("isConnected", data.get("connected", False))
-
-        # Usage data
-        device_data.total_usage = self._safe_float(
-            data.get("totalUsage") or data.get("totalFiltered") or data.get("gallonsFiltered")
-        )
-
-    def _parse_connection_status(
-        self, response: dict[str, Any], device_data: AquaTruDeviceData
-    ) -> None:
-        """Parse connection status response."""
-        data = response.get("data", response)
-        if isinstance(data, list) and data:
-            data = data[0]
-
-        device_data.is_connected = data.get("isConnected", data.get("connected", device_data.is_connected))
-
-    def _parse_savings_data(
-        self, response: dict[str, Any], device_data: AquaTruDeviceData
-    ) -> None:
-        """Parse savings data response."""
-        data = response.get("data", response)
-        if isinstance(data, list) and data:
-            data = data[0]
-
-        device_data.money_saved = self._safe_float(
-            data.get("moneySaved") or data.get("money_saved") or data.get("totalSavings")
-        )
-        device_data.bottles_saved = self._safe_int(
-            data.get("bottlesSaved") or data.get("bottles_saved") or data.get("plasticBottles")
-        )
-
-        # Usage breakdown
-        device_data.daily_usage = self._safe_float(data.get("dailyUsage") or data.get("daily"))
-        device_data.weekly_usage = self._safe_float(data.get("weeklyUsage") or data.get("weekly"))
-        device_data.monthly_usage = self._safe_float(data.get("monthlyUsage") or data.get("monthly"))
-
-        if device_data.total_usage is None:
-            device_data.total_usage = self._safe_float(
-                data.get("totalUsage") or data.get("total") or data.get("totalFiltered")
-            )
 
     @staticmethod
     def _safe_int(value: Any) -> int | None:

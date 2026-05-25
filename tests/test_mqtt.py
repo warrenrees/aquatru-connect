@@ -40,7 +40,6 @@ def mqtt_client(aws_settings, mock_session):
     """Create an MQTT client with mocks."""
     return AquaTruMqttClient(
         device_mac="48:3f:da:a3:8c:99",
-        access_token="test-access-token",
         aws_settings=aws_settings,
         session=mock_session,
     )
@@ -93,7 +92,6 @@ class TestAquaTruMqttClient:
         """Test initialization without session."""
         client = AquaTruMqttClient(
             device_mac="48:3f:da:a3:8c:99",
-            access_token="test-token",
             aws_settings=aws_settings,
         )
         assert client._session is None
@@ -103,14 +101,12 @@ class TestAquaTruMqttClient:
         """Test MAC address is normalized."""
         client = AquaTruMqttClient(
             device_mac="48:3F:DA:A3:8C:99",
-            access_token="test-token",
             aws_settings=aws_settings,
         )
         assert client._device_mac == "483fdaa38c99"
 
         client = AquaTruMqttClient(
             device_mac="48-3f-da-a3-8c-99",
-            access_token="test-token",
             aws_settings=aws_settings,
         )
         assert client._device_mac == "483fdaa38c99"
@@ -177,16 +173,11 @@ class TestAquaTruMqttClient:
         )
         assert mqtt_client._credentials_need_refresh() is True
 
-    def test_update_access_token(self, mqtt_client):
-        """Test update_access_token method."""
-        mqtt_client.update_access_token("new-token")
-        assert mqtt_client._access_token == "new-token"
 
     async def test_ensure_session_creates_when_none(self, aws_settings):
         """Test _ensure_session creates session when none exists."""
         client = AquaTruMqttClient(
             device_mac="48:3f:da:a3:8c:99",
-            access_token="test-token",
             aws_settings=aws_settings,
         )
 
@@ -203,7 +194,6 @@ class TestAquaTruMqttClient:
         """Test disconnect closes session when client owns it."""
         client = AquaTruMqttClient(
             device_mac="48:3f:da:a3:8c:99",
-            access_token="test-token",
             aws_settings=aws_settings,
             session=None,
         )
@@ -260,12 +250,12 @@ class TestParseDeviceStatus:
         """Test parsing full device status payload."""
         payload = {
             "isFiltering": True,
-            "tapNearEnd": True,
-            "tapRemoved": False,
-            "cleanRemoved": False,
-            "cleanTankFull": True,
-            "coverUp": False,
-            "isSynced": True,
+            "isTapNearEnd": True,
+            "isTapRemoved": False,
+            "isCleanRemoved": False,
+            "isCleanTankFull": True,
+            "isCoverUp": False,
+            "isPurifierSynced": True,
         }
 
         result = parse_device_status(payload)
@@ -298,16 +288,17 @@ class TestParseDeviceStatus:
         """Test parsing all false values."""
         payload = {
             "isFiltering": False,
-            "tapNearEnd": False,
-            "tapRemoved": False,
-            "cleanRemoved": False,
-            "cleanTankFull": False,
-            "coverUp": False,
-            "isSynced": False,
+            "isTapNearEnd": False,
+            "isTapRemoved": False,
+            "isCleanRemoved": False,
+            "isCleanTankFull": False,
+            "isCoverUp": False,
+            "isPurifierSynced": False,
         }
 
         result = parse_device_status(payload)
 
+        assert len(result) == 7
         assert all(value is False for value in result.values())
 
 

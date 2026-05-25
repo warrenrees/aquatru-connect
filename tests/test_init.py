@@ -1,6 +1,8 @@
 """Test the AquaTru integration initialization."""
 from __future__ import annotations
 
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -26,7 +28,7 @@ async def test_setup_entry(
 
     if entry is None:
         from homeassistant import config_entries
-        entry = config_entries.ConfigEntry(
+        entry = MockConfigEntry(
             version=1,
             minor_version=1,
             domain=DOMAIN,
@@ -65,7 +67,7 @@ async def test_unload_entry(
     """Test successful unload of config entry."""
     from homeassistant import config_entries
 
-    entry = config_entries.ConfigEntry(
+    entry = MockConfigEntry(
         version=1,
         minor_version=1,
         domain=DOMAIN,

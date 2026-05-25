@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -27,6 +26,9 @@ from .const import (
 )
 from .coordinator import AquaTruDataUpdateCoordinator
 from .entity import AquaTruEntity
+
+# Read-only integration; entities derive their state from the coordinator.
+PARALLEL_UPDATES = 0
 
 
 @dataclass(frozen=True, kw_only=True)

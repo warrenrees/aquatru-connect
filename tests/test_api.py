@@ -72,7 +72,7 @@ class TestAquaTruApiClient:
                 "userId": "user-123",
             },
         })
-        mock_session.request = AsyncMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
+        mock_session.request = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
 
         result = await api_client.async_login()
 
@@ -85,14 +85,14 @@ class TestAquaTruApiClient:
         mock_response = AsyncMock()
         mock_response.status = 401
         mock_response.json = AsyncMock(return_value={"message": "Invalid credentials"})
-        mock_session.request = AsyncMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
+        mock_session.request = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
 
         with pytest.raises(AquaTruAuthError):
             await api_client.async_login()
 
     async def test_login_connection_error(self, api_client, mock_session):
         """Test login with connection error."""
-        mock_session.request = AsyncMock(side_effect=aiohttp.ClientError("Connection failed"))
+        mock_session.request = MagicMock(side_effect=aiohttp.ClientError("Connection failed"))
 
         with pytest.raises(AquaTruConnectionError):
             await api_client.async_login()
@@ -107,14 +107,14 @@ class TestAquaTruApiClient:
             "purifiers": [
                 {
                     "purifierId": "device-1",
-                    "purifierName": "Kitchen AquaTru",
+                    "name": "Kitchen AquaTru",
                     "model": "Classic Smart",
                     "serialNumber": "SN123",
                     "macAddress": "aa:bb:cc:dd:ee:ff",
                 }
             ]
         })
-        mock_session.request = AsyncMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
+        mock_session.request = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
 
         devices = await api_client.async_get_devices()
 
@@ -126,27 +126,24 @@ class TestAquaTruApiClient:
         """Test getting device data."""
         api_client._access_token = "test-token"
 
-        # Mock the dashboard response
+        # The /user/purifiers endpoint returns a list of purifier objects,
+        # each keyed by "id" with camelCase sensor fields (per traffic captures).
         mock_response = AsyncMock()
         mock_response.status = 200
-        mock_response.json = AsyncMock(return_value={
-            "purifiers": [
-                {
-                    "purifierId": "device-1",
-                    "macAddress": "aa:bb:cc:dd:ee:ff",
-                    "tdsClean": 10,
-                    "tdsTap": 200,
-                    "filtersLife": {
-                        "pre_filter": 80,
-                        "rev_filter": 70,
-                        "voc_filter": 60,
-                    },
-                    "isConnected": True,
-                    "purifiedAmount": 500.0,
-                }
-            ]
-        })
-        mock_session.request = AsyncMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
+        mock_response.json = AsyncMock(return_value=[
+            {
+                "id": "device-1",
+                "macAddress": "aa:bb:cc:dd:ee:ff",
+                "tdsClean": 10,
+                "tdsTap": 200,
+                "preFilter": {"health": 80},
+                "revFilter": {"health": 70},
+                "vocFilter": {"health": 60},
+                "connectionStatus": "connected",
+                "purifiedAmount": 500.0,
+            }
+        ])
+        mock_session.request = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
 
         data = await api_client.async_get_device_data("device-1")
 
@@ -162,7 +159,7 @@ class TestAquaTruApiClient:
         # First call returns 401, then refresh succeeds, then retry succeeds
         call_count = 0
 
-        async def mock_request(*args, **kwargs):
+        def mock_request(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             mock_resp = AsyncMock()
@@ -301,6 +298,71 @@ class TestAquaTruDeviceData:
         assert data.filter_pre_life == 80
         assert data.is_filtering is True
         assert data.total_usage == 500.0
+
+
+class TestUsageStatisticsSelection:
+    """Test cases for _select_period_usage."""
+
+    def test_exact_period_match(self):
+        """Exact current-period match is preferred."""
+        stats = [
+            {"period": "2026-05-24", "amount": 1.0},
+            {"period": "2026-05-25", "amount": 2.5},
+        ]
+        assert AquaTruApiClient._select_period_usage(stats, "2026-05-25") == 2.5
+
+    def test_falls_back_to_latest_when_current_missing(self):
+        """When the current period is absent, the latest period is used."""
+        stats = [
+            {"period": "2026-05-22", "amount": 1.0},
+            {"period": "2026-05-24", "amount": 3.0},
+        ]
+        # Current day not present (e.g. no usage logged yet) -> latest period.
+        assert AquaTruApiClient._select_period_usage(stats, "2026-05-25") == 3.0
+
+    def test_empty_returns_none(self):
+        """An empty stats list returns None."""
+        assert AquaTruApiClient._select_period_usage([], "2026-05-25") is None
+
+
+class TestMoneyAndBottleStatistics:
+    """Test cases for computed money/bottle savings."""
+
+    def test_computed_from_volume(self, api_client):
+        """Bottles and money are derived from purifiedAmount and bottleSize.
+
+        Mirrors the AquaTru app, which ignores the (null) dollarsSaved and the
+        mismatched bottleSaved fields and computes from the raw inputs.
+        """
+        data = {
+            "purifiedAmount": 193,
+            "moneyStatistic": {
+                "quantityInPack": 24,
+                "dollarsSaved": None,
+                "bottleSize": 0.132086,
+                "waterCost": 3,
+                "bottleSaved": 476.9619793165059,
+            },
+        }
+        device_data = AquaTruDeviceData(device_id="x")
+        api_client._parse_dashboard_purifier(data, device_data)
+
+        # ceil(193 / 0.132086) == 1462 (matches the app's displayed count)
+        assert device_data.bottles_saved == 1462
+        # (193 / 0.132086 / 24) * 3 ≈ 182.65
+        assert device_data.money_saved == pytest.approx(182.65, abs=0.05)
+
+    def test_falls_back_when_no_bottle_size(self, api_client):
+        """Without bottleSize, fall back to the cloud-provided values."""
+        data = {
+            "purifiedAmount": 193,
+            "moneyStatistic": {"bottleSaved": 477, "dollarsSaved": 12.5},
+        }
+        device_data = AquaTruDeviceData(device_id="x")
+        api_client._parse_dashboard_purifier(data, device_data)
+
+        assert device_data.bottles_saved == 477
+        assert device_data.money_saved == 12.5
 
 
 class TestAquaTruAwsSettings:

@@ -61,15 +61,12 @@ async def async_get_config_entry_diagnostics(
         }
 
     # Get MQTT status
-    mqtt_status = {
+    mqtt_status: dict[str, Any] = {
         "connected": coordinator.mqtt_connected,
     }
-    if coordinator._mqtt_client:
-        mqtt_status["credentials_expiration"] = (
-            coordinator._mqtt_client.credentials_expiration.isoformat()
-            if coordinator._mqtt_client.credentials_expiration
-            else None
-        )
+    expiration = coordinator.mqtt_credentials_expiration
+    if expiration is not None:
+        mqtt_status["credentials_expiration"] = expiration.isoformat()
 
     return async_redact_data(
         {

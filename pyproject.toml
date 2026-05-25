@@ -1,6 +1,6 @@
 [project]
 name = "aquatru"
-version = "1.0.0"
+version = "1.1.2"
 description = "Home Assistant integration for AquaTru water purifiers"
 requires-python = ">=3.12"
 

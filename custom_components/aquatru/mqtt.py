@@ -1,37 +1,61 @@
-"""AWS IoT MQTT client for AquaTru real-time updates."""
+"""AWS IoT MQTT client for AquaTru real-time updates.
+
+Architecture Overview
+--------------------
+This module provides real-time device updates via AWS IoT MQTT. It connects
+to the AquaTru IoT infrastructure using Cognito for authentication.
+
+Connection Flow:
+    1. Get Cognito Identity ID from the identity pool (unauthenticated)
+    2. Exchange identity for temporary AWS credentials
+    3. Connect to AWS IoT MQTT broker using WebSockets with SigV4 auth
+    4. Subscribe to device topics: SENSOR-DATA, DEVICE-STATUS, MCU-VERSION, etc.
+
+Credential Management:
+    - Cognito credentials expire after ~1 hour
+    - Background task monitors expiration and refreshes proactively
+    - On refresh, disconnects and reconnects with new credentials
+
+Threading Considerations:
+    - AWS CRT SDK runs its own event loop in background threads
+    - MQTT callbacks execute in SDK threads, not the asyncio event loop
+    - This module stores the asyncio loop reference and uses call_soon_threadsafe
+      to schedule callbacks on the correct event loop
+
+See Also:
+    - coordinator.py: Receives MQTT messages and updates entity state
+    - api.py: Fallback polling when MQTT is unavailable
+"""
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from datetime import UTC, datetime
+from typing import Any
 
 import aiohttp
-from aiohttp.resolver import ThreadedResolver
-
 from awscrt import auth, io, mqtt
 from awsiot import mqtt_connection_builder
 
 from .const import (
     AWS_IOT_ENDPOINT,
     AWS_REGION,
-    COGNITO_IDENTITY_ENDPOINT,
     COGNITO_IDENTITY_POOL_ID,
+    CREDENTIAL_CHECK_INTERVAL,
+    CREDENTIAL_REFRESH_BUFFER,
+    MQTT_KEEP_ALIVE_SECONDS,
     MQTT_TOPIC_DEVICE_STATUS,
     MQTT_TOPIC_MCU_MODEL_ID,
     MQTT_TOPIC_MCU_VERSION,
     MQTT_TOPIC_SENSOR_DATA,
     MQTT_TOPIC_WELCOME,
 )
+from .session import create_session
 
 _LOGGER = logging.getLogger(__name__)
-
-# Refresh credentials 5 minutes before expiration
-CREDENTIAL_REFRESH_BUFFER = timedelta(minutes=5)
-# Check credentials every 10 minutes
-CREDENTIAL_CHECK_INTERVAL = timedelta(minutes=10)
 
 
 @dataclass
@@ -65,7 +89,6 @@ class AquaTruMqttClient:
     def __init__(
         self,
         device_mac: str,
-        access_token: str,
         aws_settings: AwsIotSettings | None = None,
         on_message: Callable[[str, dict[str, Any]], None] | None = None,
         session: aiohttp.ClientSession | None = None,
@@ -74,7 +97,6 @@ class AquaTruMqttClient:
 
         Args:
             device_mac: Device MAC address (without colons, lowercase)
-            access_token: AquaTru API access token (used as Cognito login token)
             aws_settings: AWS IoT settings (if None, uses hardcoded defaults)
             on_message: Callback for received messages (topic, payload)
             session: Optional aiohttp session (if None, creates own session)
@@ -91,7 +113,6 @@ class AquaTruMqttClient:
                 region=AWS_REGION,
                 iot_endpoint=AWS_IOT_ENDPOINT,
             )
-        self._access_token = access_token
         self._on_message = on_message
         self._credentials: CognitoCredentials | None = None
         self._mqtt_connection: mqtt.Connection | None = None
@@ -102,6 +123,9 @@ class AquaTruMqttClient:
         self._reconnect_task: asyncio.Task | None = None
         self._credential_refresh_task: asyncio.Task | None = None
         self._loop: asyncio.AbstractEventLoop | None = None  # Store event loop for thread-safe callbacks
+        # Serializes connection (re)builds so credential refresh and reconnect
+        # paths can never construct two MQTT connections concurrently.
+        self._connect_lock = asyncio.Lock()
 
     @property
     def is_connected(self) -> bool:
@@ -118,7 +142,7 @@ class AquaTruMqttClient:
         if not self._credentials:
             return True
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = self._credentials.expiration
 
         # Refresh if we're within the buffer period of expiration
@@ -130,22 +154,19 @@ class AquaTruMqttClient:
             try:
                 await asyncio.sleep(CREDENTIAL_CHECK_INTERVAL.total_seconds())
 
-                if not self._connected:
-                    _LOGGER.debug("Not connected, skipping credential check")
-                    continue
-
+                # Refresh proactively whether or not we are currently connected:
+                # if a transient drop coincides with credential expiry, the SDK's
+                # auto-reconnect would otherwise be stuck retrying with expired
+                # static credentials. Refreshing rebuilds the connection.
                 if self._credentials_need_refresh():
-                    _LOGGER.info(
+                    _LOGGER.debug(
                         "Credentials expiring soon (at %s), refreshing...",
                         self._credentials.expiration.isoformat() if self._credentials else "unknown"
                     )
                     await self._async_refresh_credentials()
-                else:
-                    time_remaining = self._credentials.expiration - datetime.now(timezone.utc)
-                    _LOGGER.debug(
-                        "Credentials still valid for %s",
-                        time_remaining
-                    )
+                elif self._credentials:
+                    time_remaining = self._credentials.expiration - datetime.now(UTC)
+                    _LOGGER.debug("Credentials still valid for %s", time_remaining)
 
             except asyncio.CancelledError:
                 _LOGGER.debug("Credential refresh loop cancelled")
@@ -157,39 +178,40 @@ class AquaTruMqttClient:
 
     async def _async_refresh_credentials(self) -> bool:
         """Refresh credentials by disconnecting and reconnecting."""
-        _LOGGER.info("Refreshing AWS credentials...")
+        _LOGGER.debug("Refreshing AWS credentials...")
 
-        # Disconnect current connection
-        if self._mqtt_connection and self._connected:
+        async with self._connect_lock:
+            # Disconnect current connection
+            if self._mqtt_connection:
+                try:
+                    disconnect_future = self._mqtt_connection.disconnect()
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, disconnect_future.result)
+                except Exception as err:
+                    _LOGGER.warning("Error during disconnect for credential refresh: %s", err)
+                finally:
+                    self._connected = False
+                    self._mqtt_connection = None
+
+            # Get new credentials and reconnect
             try:
-                disconnect_future = self._mqtt_connection.disconnect()
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, disconnect_future.result)
+                identity_id = await self._get_cognito_identity()
+                self._credentials = await self._get_credentials(identity_id)
+
+                _LOGGER.debug(
+                    "Got new credentials, expires at %s",
+                    self._credentials.expiration.isoformat()
+                )
+
+                # Reconnect with new credentials
+                return await self._async_connect_with_credentials()
+
             except Exception as err:
-                _LOGGER.warning("Error during disconnect for credential refresh: %s", err)
-            finally:
-                self._connected = False
-                self._mqtt_connection = None
-
-        # Get new credentials and reconnect
-        try:
-            identity_id = await self._get_cognito_identity()
-            self._credentials = await self._get_credentials(identity_id)
-
-            _LOGGER.info(
-                "Got new credentials, expires at %s",
-                self._credentials.expiration.isoformat()
-            )
-
-            # Reconnect with new credentials
-            return await self._async_connect_with_credentials()
-
-        except Exception as err:
-            _LOGGER.error("Failed to refresh credentials: %s", err)
-            # Schedule reconnection attempt
-            if not self._reconnect_task or self._reconnect_task.done():
-                self._reconnect_task = asyncio.create_task(self._async_reconnect())
-            return False
+                _LOGGER.error("Failed to refresh credentials: %s", err)
+                # Schedule a full reconnection attempt as a fallback
+                if not self._reconnect_task or self._reconnect_task.done():
+                    self._reconnect_task = asyncio.create_task(self._async_reconnect())
+                return False
 
     def _build_mqtt_connection(self) -> mqtt.Connection:
         """Build MQTT connection (runs in executor to avoid blocking)."""
@@ -213,7 +235,7 @@ class AquaTruMqttClient:
             client_bootstrap=client_bootstrap,
             client_id=f"aquatru-ha-{self._device_mac}",
             clean_session=True,
-            keep_alive_secs=30,
+            keep_alive_secs=MQTT_KEEP_ALIVE_SECONDS,
             on_connection_interrupted=self._on_connection_interrupted,
             on_connection_resumed=self._on_connection_resumed,
         )
@@ -226,20 +248,20 @@ class AquaTruMqttClient:
 
         try:
             # Build connection in executor to avoid blocking calls
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             self._mqtt_connection = await loop.run_in_executor(
                 None, self._build_mqtt_connection
             )
 
             # Connect
-            _LOGGER.info("Connecting to AWS IoT MQTT...")
+            _LOGGER.debug("Connecting to AWS IoT MQTT...")
             connect_future = self._mqtt_connection.connect()
 
             # Run in executor since awscrt uses its own event loop
             await loop.run_in_executor(None, connect_future.result)
 
             self._connected = True
-            _LOGGER.info("Connected to AWS IoT MQTT")
+            _LOGGER.debug("Connected to AWS IoT MQTT")
 
             # Re-subscribe to device topics
             self._subscribed_topics = []
@@ -255,9 +277,7 @@ class AquaTruMqttClient:
     async def _ensure_session(self) -> aiohttp.ClientSession:
         """Ensure we have an active HTTP session."""
         if self._session is None or self._session.closed:
-            # Only create a session if we don't have one (i.e., none was injected)
-            connector = aiohttp.TCPConnector(resolver=ThreadedResolver())
-            self._session = aiohttp.ClientSession(connector=connector)
+            self._session = create_session()
             self._owns_session = True
         return self._session
 
@@ -326,10 +346,10 @@ class AquaTruMqttClient:
                 # Parse expiration timestamp
                 expiration_ts = creds.get("Expiration", 0)
                 if isinstance(expiration_ts, (int, float)):
-                    expiration = datetime.fromtimestamp(expiration_ts, tz=timezone.utc)
+                    expiration = datetime.fromtimestamp(expiration_ts, tz=UTC)
                 else:
                     # Default to 1 hour from now
-                    expiration = datetime.now(timezone.utc)
+                    expiration = datetime.now(UTC)
 
                 credentials = CognitoCredentials(
                     identity_id=identity_id,
@@ -354,18 +374,19 @@ class AquaTruMqttClient:
             # Store event loop reference for thread-safe callbacks from AWS SDK
             self._loop = asyncio.get_running_loop()
 
-            # Get Cognito identity and credentials
-            identity_id = await self._get_cognito_identity()
-            self._credentials = await self._get_credentials(identity_id)
+            async with self._connect_lock:
+                # Get Cognito identity and credentials
+                identity_id = await self._get_cognito_identity()
+                self._credentials = await self._get_credentials(identity_id)
 
-            _LOGGER.info(
-                "Got credentials, expires at %s",
-                self._credentials.expiration.isoformat()
-            )
+                _LOGGER.debug(
+                    "Got credentials, expires at %s",
+                    self._credentials.expiration.isoformat()
+                )
 
-            # Connect with the credentials
-            if not await self._async_connect_with_credentials():
-                return False
+                # Connect with the credentials
+                if not await self._async_connect_with_credentials():
+                    return False
 
             # Start credential refresh loop
             if self._credential_refresh_task is None or self._credential_refresh_task.done():
@@ -394,7 +415,7 @@ class AquaTruMqttClient:
             MQTT_TOPIC_WELCOME.format(mac=self._device_mac),
         ]
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         for topic in topics:
             try:
@@ -443,22 +464,20 @@ class AquaTruMqttClient:
             self._on_message(topic, data)
 
     def _on_connection_interrupted(self, connection, error, **kwargs) -> None:
-        """Handle connection interruption."""
-        _LOGGER.warning("MQTT connection interrupted: %s", error)
-        self._connected = False
+        """Handle connection interruption.
 
-        # Schedule reconnection using stored event loop reference
-        # (AWS SDK callbacks run in separate threads)
-        if self._loop is not None:
-            self._loop.call_soon_threadsafe(
-                lambda: setattr(self, '_reconnect_task', self._loop.create_task(self._async_reconnect()))
-            )
-        else:
-            _LOGGER.error("Cannot schedule reconnection - no event loop stored")
+        The AWS CRT SDK automatically retries the connection and fires
+        ``_on_connection_resumed`` when it succeeds, so we only mark ourselves
+        disconnected here. Credential expiry (which the SDK's auto-reconnect
+        cannot recover from on its own) is handled proactively by the credential
+        refresh loop, which rebuilds the connection with fresh credentials.
+        """
+        _LOGGER.debug("MQTT connection interrupted: %s", error)
+        self._connected = False
 
     def _on_connection_resumed(self, connection, return_code, session_present, **kwargs) -> None:
         """Handle connection resumption."""
-        _LOGGER.info("MQTT connection resumed (return_code=%s)", return_code)
+        _LOGGER.debug("MQTT connection resumed (return_code=%s)", return_code)
         self._connected = True
 
     async def _async_reconnect(self) -> None:
@@ -467,7 +486,7 @@ class AquaTruMqttClient:
         max_retries = 10
 
         for attempt in range(max_retries):
-            _LOGGER.info("Attempting MQTT reconnection (attempt %d/%d)", attempt + 1, max_retries)
+            _LOGGER.debug("Attempting MQTT reconnection (attempt %d/%d)", attempt + 1, max_retries)
 
             await asyncio.sleep(retry_delay)
 
@@ -506,11 +525,11 @@ class AquaTruMqttClient:
 
         if self._mqtt_connection and self._connected:
             try:
-                _LOGGER.info("Disconnecting from AWS IoT MQTT...")
+                _LOGGER.debug("Disconnecting from AWS IoT MQTT...")
                 disconnect_future = self._mqtt_connection.disconnect()
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, disconnect_future.result)
-                _LOGGER.info("Disconnected from AWS IoT MQTT")
+                _LOGGER.debug("Disconnected from AWS IoT MQTT")
             except Exception as err:
                 _LOGGER.error("Error disconnecting from MQTT: %s", err)
             finally:
@@ -519,10 +538,6 @@ class AquaTruMqttClient:
         # Only close the session if we created it
         if self._owns_session and self._session and not self._session.closed:
             await self._session.close()
-
-    def update_access_token(self, access_token: str) -> None:
-        """Update the access token (called when token is refreshed)."""
-        self._access_token = access_token
 
 
 def parse_sensor_data(payload: dict[str, Any]) -> dict[str, Any]:

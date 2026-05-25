@@ -11,13 +11,12 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import PERCENTAGE, UnitOfTime, UnitOfVolume, EntityCategory
+from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTime, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import AquaTruConfigEntry
 from .api import AquaTruDeviceData
-
 from .const import (
     SENSOR_BOTTLES_SAVED,
     SENSOR_CONNECTION_STATUS,
@@ -42,6 +41,9 @@ from .const import (
 )
 from .coordinator import AquaTruDataUpdateCoordinator
 from .entity import AquaTruEntity
+
+# Read-only integration; entities derive their state from the coordinator.
+PARALLEL_UPDATES = 0
 
 
 @dataclass(frozen=True, kw_only=True)
