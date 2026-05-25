@@ -4,7 +4,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/warrenrees/aquatru-connect)](https://github.com/warrenrees/aquatru-connect/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Home Assistant custom integration for AquaTru Connect (Classic Smart) WiFi water purifiers. Monitor your water quality, filter life, usage statistics, and device status directly from Home Assistant.
+A Home Assistant custom integration for AquaTru Connect WiFi water purifiers. Monitor your water quality, filter life, usage statistics, and device status directly from Home Assistant.
 
 ## Features
 
@@ -17,7 +17,10 @@ A Home Assistant custom integration for AquaTru Connect (Classic Smart) WiFi wat
 
 ## Supported Devices
 
+Any WiFi-enabled AquaTru purifier that reports to the AquaTru cloud (and works in the AquaTru mobile app) should be compatible. The device's model is detected automatically and shown on its device page in Home Assistant.
+
 - AquaTru Classic Smart (WiFi-enabled)
+- AquaTru AD2020 (confirmed working)
 - AquaTru AT2050 (untested, may work)
 
 ## Installation
@@ -51,6 +54,7 @@ A Home Assistant custom integration for AquaTru Connect (Classic Smart) WiFi wat
            ├── manifest.json
            ├── mqtt.py
            ├── sensor.py
+           ├── session.py
            ├── strings.json
            └── translations/
                └── en.json
@@ -93,6 +97,10 @@ A Home Assistant custom integration for AquaTru Connect (Classic Smart) WiFi wat
 | WiFi Version | WiFi module firmware version | - |
 | MCU Version | Main controller firmware version | - |
 | MQTT Status | Real-time connection status | connected/disconnected |
+
+> **Note**: *Money Saved* and *Bottles Saved* are estimates calculated from the total water filtered together with the bottle size and price you configured in the AquaTru app, mirroring the app's own figures (the AquaTru cloud does not return a money-saved value directly). *Daily/Weekly/Monthly Water Usage* reflect the most recent period reported by the cloud.
+
+> **Note**: Water-volume sensors report in gallons natively; Home Assistant automatically converts them to your configured unit system (e.g. liters) for display.
 
 ### Binary Sensors
 
@@ -196,7 +204,7 @@ The MQTT Status sensor indicates whether real-time updates are active.
 
 - **Cloud Dependency**: This integration requires an active internet connection to communicate with AquaTru's cloud API. Local-only control is not supported.
 - **Single Device per Entry**: Each config entry supports one AquaTru device. If you have multiple devices, add the integration multiple times.
-- **Usage Statistics Delay**: Daily, weekly, and monthly usage statistics may be delayed by up to 24 hours as they are calculated server-side.
+- **Usage Statistics**: Daily, weekly, and monthly usage are calculated server-side and may lag real usage. When the cloud has not yet reported the current period, the sensor shows the most recent period it has data for.
 - **MQTT Availability**: Real-time MQTT updates depend on AquaTru's AWS IoT infrastructure. If MQTT is unavailable, the integration falls back to cloud polling.
 - **Filter Reset**: Filter life cannot be reset through this integration; use the official AquaTru mobile app.
 
