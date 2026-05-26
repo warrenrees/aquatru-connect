@@ -8,5 +8,5 @@
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/warrenrees/aquatru-connect/issues",
   "requirements": ["awsiotsdk>=1.21.0"],
-  "version": "1.1.2"
+  "version": "1.1.3"
 }

@@ -2,6 +2,14 @@
 
 ### [Unreleased]
 
+### v1.1.3
+
+#### Added
+- Brand icon and logo (light and dark variants) served via the in-integration
+  `brand/` folder, so Home Assistant shows AquaTru branding in the UI.
+- GitHub Actions CI: `validate.yml` (hassfest + HACS validation) and `test.yml`
+  (runs the pytest suite) on push and pull request.
+
 ### v1.1.2
 
 #### Fixed
